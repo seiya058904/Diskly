@@ -1,0 +1,8 @@
+﻿{"volume":"C:\\","engine":"mft","cancel_ms":50,"seconds":1.106,"cancelled":true,"complete":false,"snapshot_complete":false,"diff_refused":true,"files_seen":0}
+{"volume":"C:\\","engine":"walk","cancel_ms":50,"seconds":0.074,"cancelled":true,"complete":false,"snapshot_complete":false,"diff_refused":true,"files_seen":9212}
+{"volume":"C:\\","engine":"mft","cancel_ms":300,"seconds":0.500,"cancelled":true,"complete":false,"snapshot_complete":false,"diff_refused":true,"files_seen":0}
+{"volume":"C:\\","engine":"walk","cancel_ms":300,"seconds":0.317,"cancelled":true,"complete":false,"snapshot_complete":false,"diff_refused":true,"files_seen":37433}
+{"volume":"D:\\","engine":"mft","cancel_ms":50,"seconds":0.490,"cancelled":true,"complete":false,"snapshot_complete":false,"diff_refused":true,"files_seen":0}
+{"volume":"D:\\","engine":"walk","cancel_ms":50,"seconds":0.052,"cancelled":true,"complete":false,"snapshot_complete":false,"diff_refused":true,"files_seen":10169}
+{"volume":"D:\\","engine":"mft","cancel_ms":300,"seconds":0.278,"cancelled":false,"complete":true,"snapshot_complete":true,"diff_refused":false,"files_seen":118182}
+{"volume":"D:\\","engine":"walk","cancel_ms":300,"seconds":0.306,"cancelled":true,"complete":false,"snapshot_complete":false,"diff_refused":true,"files_seen":47048}

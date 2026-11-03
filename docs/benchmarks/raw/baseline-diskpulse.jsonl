@@ -1,0 +1,6 @@
+{"tool":"diskpulse","run":1,"volume":"C:","status":"complete","seconds":14.036,"files":555624,"bytes":106077713926,"access_denied":85,"reparse_points":212,"configured_exclusions":2,"unavailable":1,"errors":1}
+{"tool":"diskpulse","run":1,"volume":"D:","status":"complete","seconds":1.4,"files":112367,"bytes":27621044808,"access_denied":1,"reparse_points":0,"configured_exclusions":2,"unavailable":0,"errors":0}
+{"tool":"diskpulse","run":2,"volume":"C:","status":"complete","seconds":11.095,"files":555624,"bytes":106077725502,"access_denied":85,"reparse_points":212,"configured_exclusions":2,"unavailable":1,"errors":1}
+{"tool":"diskpulse","run":2,"volume":"D:","status":"complete","seconds":1.464,"files":112367,"bytes":27621045219,"access_denied":1,"reparse_points":0,"configured_exclusions":2,"unavailable":0,"errors":0}
+{"tool":"diskpulse","run":3,"volume":"C:","status":"complete","seconds":11.178,"files":555624,"bytes":106077734480,"access_denied":85,"reparse_points":212,"configured_exclusions":2,"unavailable":1,"errors":1}
+{"tool":"diskpulse","run":3,"volume":"D:","status":"complete","seconds":1.485,"files":112367,"bytes":27621045632,"access_denied":1,"reparse_points":0,"configured_exclusions":2,"unavailable":0,"errors":0}
