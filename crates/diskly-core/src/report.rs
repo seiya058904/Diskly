@@ -60,10 +60,16 @@ fn csp_hash(text: &str) -> String {
     format!("'sha256-{}'", base64(&Sha256::digest(text.as_bytes())))
 }
 
+/// Browsers turn CRLF into LF before hashing a script, and a Windows checkout has
+/// CRLF. Hashing the text as it is would get the page's own code blocked.
+fn lf(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
 /// The complete page for `data`.
 pub fn render<T: Serialize>(data: &T) -> Result<String, serde_json::Error> {
-    let style = format!("{TOKENS}\n{STYLE}");
-    let script = format!("{LIB}\n{SCRIPT}");
+    let style = lf(&format!("{TOKENS}\n{STYLE}"));
+    let script = lf(&format!("{LIB}\n{SCRIPT}"));
     let csp = format!(
         "default-src 'none'; script-src {}; style-src {}; img-src data:; base-uri 'none'; form-action 'none'",
         csp_hash(&script),
@@ -71,7 +77,7 @@ pub fn render<T: Serialize>(data: &T) -> Result<String, serde_json::Error> {
     );
     let json = inert_json(data)?;
     // The data goes in last, so nothing inside it can be taken for a placeholder.
-    Ok(TEMPLATE
+    Ok(lf(TEMPLATE)
         .replacen("__CSP__", &csp, 1)
         .replacen("__STYLE__", &style, 1)
         .replacen("__SCRIPT__", &script, 1)
@@ -120,7 +126,7 @@ mod tests {
     #[test]
     fn the_csp_hash_is_of_the_exact_script_in_the_page() {
         let page = render(&1).unwrap();
-        let script = format!("{LIB}\n{SCRIPT}");
+        let script = lf(&format!("{LIB}\n{SCRIPT}"));
         assert!(page.contains(&format!("<script>{script}</script>")));
         assert!(page.contains(&csp_hash(&script)));
     }
@@ -129,6 +135,12 @@ mod tests {
     fn page_code_cannot_end_its_own_element() {
         assert!(!format!("{LIB}\n{SCRIPT}").contains("</script"));
         assert!(!format!("{TOKENS}\n{STYLE}").contains("</style"));
+    }
+
+    #[test]
+    fn line_ends_cannot_break_the_hash_on_a_windows_checkout() {
+        assert_eq!(lf("a\r\nb\nc\r\n"), "a\nb\nc\n");
+        assert!(!render(&1).unwrap().contains('\r'));
     }
 
     #[test]
