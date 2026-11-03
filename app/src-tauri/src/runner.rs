@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use diskghost_core::{Progress, Snapshot};
 use diskly_core::scan::{is_elevated, run_per_disk, scan_root, ScanStatus, ScanSummary};
 use diskly_core::session::{commit_run, write_report, RunRecord, VolumeResult};
-use diskly_core::store::{new_scan_id, now_unix, Store};
+use diskly_core::store::{new_scan_id, now_unix, Store, KEEP_SNAPSHOTS};
 use diskly_core::volumes::{fixed_volumes, Volume};
 use serde::Serialize;
 use tauri::ipc::Channel;
@@ -333,6 +333,7 @@ pub fn run(
     let clock = Clock::new();
     let started_at = now_unix();
     let scan_id = new_scan_id();
+    store.make_room();
     let volumes = fixed_volumes();
     let (scannable, blocked): (Vec<Volume>, Vec<Volume>) =
         volumes.into_iter().partition(|v| v.problem.is_none());
@@ -395,11 +396,16 @@ pub fn run(
         });
     }
 
-    let keep = store.load_settings().keep_per_volume;
     let seconds = clock.seconds();
     let cancelled = control.cancel.load(Ordering::Relaxed);
     let mut run = commit_run(
-        &store, &scan_id, started_at, seconds, declined, scanned, keep,
+        &store,
+        &scan_id,
+        started_at,
+        seconds,
+        declined,
+        scanned,
+        KEEP_SNAPSHOTS,
     );
     let stored = run.volumes.iter().filter(|v| v.stored).count();
 

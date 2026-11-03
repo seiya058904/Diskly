@@ -13,14 +13,28 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use diskly_core::session::{write_report, RunRecord};
-use diskly_core::store::{Settings, Store};
+use diskly_core::store::{
+    clear_webview_folder, folder_size, Footprint, Settings, Store, WEBVIEW_LIMIT,
+};
 use diskly_core::volumes::{fixed_volumes, Volume};
 use runner::{Control, ScanEvent};
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::utils::config::WindowEffectsConfig;
 use tauri::utils::WindowEffect;
-use tauri::{AppHandle, Manager, State, Theme};
+use tauri::{AppHandle, Manager, State, Theme, WebviewWindowBuilder};
+
+/// WebView2 is a whole browser, and left alone it downloads components and fills
+/// caches: 75 MB was measured for this small window, and the downloads go against
+/// "no network". With these it stays at about 2 MB. It only ever shows the window's
+/// own few files, so there is nothing a cache would speed up. Tauri's own default
+/// flags are in the first one.
+const WEBVIEW_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,PersistentHistograms,SpareRendererForSitePerProcess \
+     --disable-component-update --disable-background-networking --no-pings \
+     --disable-gpu-shader-disk-cache --disk-cache-size=1048576 --media-cache-size=1048576";
+
+/// Where version 0.1.0 left WebView2's files, by default, under the app's identifier.
+const OLD_WEBVIEW_FOLDER: &str = r"io.github.seiya058904.diskly\EBWebView";
 
 struct AppState {
     store: Store,
@@ -34,6 +48,8 @@ struct Home {
     settings: Settings,
     last_run: Option<RunRecord>,
     data_folder: PathBuf,
+    program: Option<PathBuf>,
+    footprint: Footprint,
     version: &'static str,
     mica: bool,
 }
@@ -45,6 +61,8 @@ fn home(state: State<AppState>) -> Home {
         settings: state.store.load_settings(),
         last_run: state.store.list_runs::<RunRecord>().into_iter().next(),
         data_folder: state.store.root().to_path_buf(),
+        program: std::env::current_exe().ok(),
+        footprint: state.store.footprint(),
         version: env!("CARGO_PKG_VERSION"),
         mica: state.mica,
     }
@@ -139,9 +157,8 @@ fn open_data_folder(state: State<AppState>) -> Result<(), String> {
 
 #[tauri::command]
 fn save_settings(settings: Settings, state: State<AppState>) -> Result<(), String> {
-    let valid = ["ask", "fast", "normal"].contains(&settings.scan_mode.as_str())
-        && ["system", "light", "dark"].contains(&settings.theme.as_str())
-        && (2..=1000).contains(&settings.keep_per_volume);
+    let valid = ["fast", "normal"].contains(&settings.scan_mode.as_str())
+        && ["system", "light", "dark"].contains(&settings.theme.as_str());
     if !valid {
         return Err("设置无效".to_string());
     }
@@ -187,6 +204,27 @@ fn main() {
     };
     let mica = shell::supports_mica();
     let theme = theme_of(&store.load_settings().theme);
+    let webview_dir = store.webview_dir();
+
+    // Before the window is there to use them, caches that have grown too large go.
+    if folder_size(&webview_dir) > WEBVIEW_LIMIT {
+        clear_webview_folder(&webview_dir);
+    }
+    if std::env::var_os("DISKLY_DATA_DIR").is_none() {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            let old = PathBuf::from(local).join(OLD_WEBVIEW_FOLDER);
+            clear_webview_folder(&old);
+            if let Some(parent) = old.parent() {
+                diskly_core::store::remove_session_folder(&old);
+                diskly_core::store::remove_session_folder(parent);
+            }
+        }
+    }
+    // What an older version kept, or a limit passed: brought back in without a scan.
+    {
+        let store = store.clone();
+        std::thread::spawn(move || store.enforce(store.data_budget()));
+    }
 
     let result = tauri::Builder::default()
         .manage(AppState {
@@ -206,14 +244,23 @@ fn main() {
             apply_theme,
         ])
         .setup(move |app| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_theme(theme);
-                if mica {
-                    let _ = window.set_effects(WindowEffectsConfig {
-                        effects: vec![WindowEffect::Mica],
-                        ..WindowEffectsConfig::default()
-                    });
-                }
+            let config = app
+                .config()
+                .app
+                .windows
+                .first()
+                .cloned()
+                .ok_or("the window is not configured")?;
+            let window = WebviewWindowBuilder::from_config(app.handle(), &config)?
+                .data_directory(webview_dir)
+                .additional_browser_args(WEBVIEW_ARGS)
+                .build()?;
+            let _ = window.set_theme(theme);
+            if mica {
+                let _ = window.set_effects(WindowEffectsConfig {
+                    effects: vec![WindowEffect::Mica],
+                    ..WindowEffectsConfig::default()
+                });
             }
             Ok(())
         })

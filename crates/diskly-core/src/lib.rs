@@ -5,12 +5,14 @@
 //! API: which volumes exist and whether a scan is really of the same one
 //! ([`volumes`]), scanning several at once and finding what could not be read
 //! ([`scan`]), keeping history safely ([`store`]), making snapshots comparable
-//! without ever presenting the unknown as a change ([`compare`]), and turning
-//! it all into one offline file ([`report`], [`session`]).
+//! without ever presenting the unknown as a change ([`compare`]), finding where
+//! the space went ([`insights`]), and turning it all into one offline file
+//! ([`report`], [`session`]).
 //!
 //! Nothing in here writes outside Diskly's own data folder.
 
 pub mod compare;
+pub mod insights;
 pub mod report;
 pub mod scan;
 pub mod session;

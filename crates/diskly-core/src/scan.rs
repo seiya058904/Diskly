@@ -2,22 +2,22 @@
 //!
 //! The core marks a folder it could not list as read and empty (see
 //! docs/benchmarks/2026-11-core-acceptance.md). Comparing such a scan would
-//! report freed space that was never freed, so after a directory walk every
-//! folder that looks empty is tried once more: those that cannot be listed are
-//! kept as unread, and comparison treats them as unknown.
+//! report freed space that was never freed, so the folders the walk could not
+//! list are kept as unread, and comparison treats them as unknown.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::time::Instant;
 
-use diskghost_core::{DirSize, Options, Progress, ScanTree, Snapshot};
-use rayon::prelude::*;
+use diskghost_core::{Options, Progress, ScanTree, Snapshot};
 use serde::{Deserialize, Serialize};
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::Security::{
     GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+use crate::insights::{self, Insights};
 
 /// Threads per volume for the directory walk: more only cost CPU (measured in
 /// docs/benchmarks/2026-11-core-acceptance.md).
@@ -52,6 +52,10 @@ pub struct ScanSummary {
     pub disk_free: u64,
     /// Folders that could not be listed, relative to the root.
     pub unread_dirs: Vec<String>,
+    /// Where the space went. It travels with the summary out of the elevated helper,
+    /// and is stored in its own file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub insights: Option<Insights>,
 }
 
 impl ScanSummary {
@@ -75,6 +79,7 @@ impl ScanSummary {
             disk_total: 0,
             disk_free: 0,
             unread_dirs: Vec::new(),
+            insights: None,
         }
     }
 }
@@ -87,35 +92,6 @@ pub fn relative_path(root: &Path, path: &Path) -> Option<String> {
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .collect();
     Some(parts.join("\\"))
-}
-
-/// Among the folders of a finished walk, those that cannot be listed. Only a
-/// folder with no size and no files can be one. A folder that vanished since
-/// the walk is not unreadable, it is gone.
-pub fn find_unread(root: &Path, dirs: &[DirSize]) -> Vec<String> {
-    let candidates: Vec<&Path> = dirs
-        .iter()
-        .filter(|d| d.size == 0 && d.file_count == 0)
-        .map(|d| d.path.as_path())
-        .collect();
-    let probe = |list: &[&Path]| -> Vec<String> {
-        list.par_iter()
-            .filter(|p| {
-                std::fs::read_dir(p).is_err_and(|e| e.kind() != std::io::ErrorKind::NotFound)
-            })
-            .filter_map(|p| relative_path(root, p))
-            .collect()
-    };
-    let mut unread = match rayon::ThreadPoolBuilder::new()
-        .num_threads(WALK_THREADS)
-        .thread_name(|i| format!("diskly-probe-{i}"))
-        .build()
-    {
-        Ok(pool) => pool.install(|| probe(&candidates)),
-        Err(_) => probe(&candidates),
-    };
-    unread.sort();
-    unread
 }
 
 /// Scan `root`. A scan that ran to its end gives a snapshot; a cancelled or
@@ -140,13 +116,18 @@ pub fn scan_root(
     let tree = ScanTree::build(root, &options, progress);
     let report = tree.root_report(0);
     let cancelled = tree.cancelled();
-    // The MFT engine does not list folders, so failing to list one means nothing there.
-    let unread_dirs = if !cancelled && tree.engine() == "walk" {
-        find_unread(root, &tree.dir_sizes())
-    } else {
+    let mut unread_dirs: Vec<String> = if cancelled {
         Vec::new()
+    } else {
+        tree.unlistable_dirs()
+            .iter()
+            .filter_map(|p| relative_path(root, p))
+            .filter(|rel| !rel.is_empty())
+            .collect()
     };
+    unread_dirs.sort();
     let snapshot = (!cancelled).then(|| Snapshot::capture(&tree));
+    let insights = (!cancelled).then(|| insights::from_tree(&tree));
     let summary = ScanSummary {
         status: if cancelled {
             ScanStatus::Cancelled
@@ -165,6 +146,7 @@ pub fn scan_root(
         disk_total: report.disk_total,
         disk_free: report.disk_free,
         unread_dirs,
+        insights,
     };
     (summary, snapshot)
 }

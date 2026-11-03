@@ -8,10 +8,17 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::compare::{self, FileChanges, NodeTable, PairStatus};
+use crate::insights::{self, Insights};
 use crate::report;
 use crate::scan::{ScanStatus, ScanSummary};
-use crate::store::{now_unix, SnapshotMeta, Store};
+use crate::store::{now_unix, Footprint, ScanRecord, SnapshotMeta, Store, KEEP_REPORTS};
 use crate::volumes::Volume;
+
+/// Folders shown in one report, shared among its volumes, so that it stays small
+/// however many disks there are.
+const REPORT_NODES: usize = 30_000;
+/// But never fewer than this for a volume.
+const VOLUME_NODES: usize = 4_000;
 
 /// What a scan of one volume produced.
 pub struct VolumeResult {
@@ -66,9 +73,10 @@ pub fn commit_run(
     for result in results {
         let VolumeResult {
             volume,
-            summary,
+            mut summary,
             snapshot,
         } = result;
+        let insights = summary.insights.take();
         let mut error = summary.error.clone();
         let mut stored = false;
         if let (ScanStatus::Complete, Some(snapshot)) = (summary.status, &snapshot) {
@@ -80,8 +88,19 @@ pub fn commit_run(
                             issues.push(format!("{}: 无法保存文件变化：{e}", volume.letter));
                         }
                     }
+                    if let Some(insights) = &insights {
+                        if let Err(e) = store.save_insights(&meta, insights) {
+                            issues.push(format!("{}: 无法保存占用分析：{e}", volume.letter));
+                        }
+                    }
+                    if let Err(e) = store.record_scan(&meta, insights.as_ref()) {
+                        issues.push(format!("{}: 无法保存扫描记录：{e}", volume.letter));
+                    }
                     if let Err(e) = store.prune(&meta.volume_key, keep) {
                         issues.push(format!("{}: 无法清理旧快照：{e}", volume.letter));
+                    }
+                    if let Err(e) = store.slim_older_scans(&meta.volume_key) {
+                        issues.push(format!("{}: 无法压缩旧快照：{e}", volume.letter));
                     }
                 }
                 Ok(None) => {
@@ -135,7 +154,7 @@ fn changes_against_previous(
         .entries
         .iter()
         .rev()
-        .filter(|m| m.scan_id != meta.scan_id)
+        .filter(|m| m.scan_id != meta.scan_id && !m.folders_only)
         .find(|m| compare::pair_status(m, meta) == PairStatus::Comparable)?;
     let old = store.load(previous).ok()?;
     Some(compare::file_changes(previous, &old, meta, snapshot))
@@ -205,6 +224,10 @@ pub struct VolumeReport {
     pub table: NodeTable,
     /// File changes by the newer scan's id.
     pub file_changes: BTreeMap<String, FileChanges>,
+    /// Where the space went, by scan id.
+    pub insights: BTreeMap<String, Insights>,
+    /// The long history, oldest first. Most of it has no snapshot any more.
+    pub records: Vec<ScanRecord>,
     pub issues: Vec<String>,
 }
 
@@ -214,6 +237,9 @@ pub struct ReportData {
     pub format: u32,
     pub app_version: &'static str,
     pub generated_at: u64,
+    /// The look chosen in the window, until the page is told otherwise.
+    pub theme: String,
+    pub footprint: Footprint,
     pub run: Option<RunRecord>,
     pub volumes: Vec<VolumeReport>,
 }
@@ -254,6 +280,7 @@ pub fn report_data(store: &Store, run: Option<&RunRecord>, connected: &[Volume])
             }
         }
     }
+    let node_limit = (REPORT_NODES / keys.len().max(1)).clamp(VOLUME_NODES, compare::NODE_LIMIT);
     let mut volumes: Vec<VolumeReport> = keys
         .iter()
         .map(|key| {
@@ -263,7 +290,7 @@ pub fn report_data(store: &Store, run: Option<&RunRecord>, connected: &[Volume])
                 .iter()
                 .find(|v| v.identity.key().as_deref() == Some(key));
             let last = history.last().map(|(meta, _)| meta);
-            let table = compare::build_table(&history, compare::NODE_LIMIT).unwrap_or_else(|e| {
+            let table = compare::build_table(&history, node_limit).unwrap_or_else(|e| {
                 issues.push(format!("无法整理目录数据：{e}"));
                 NodeTable::default()
             });
@@ -271,6 +298,35 @@ pub fn report_data(store: &Store, run: Option<&RunRecord>, connected: &[Volume])
             for (meta, _) in &history {
                 if let Some(changes) = store.load_file_changes::<FileChanges>(meta) {
                     file_changes.insert(meta.scan_id.clone(), changes);
+                }
+            }
+            let mut insights_by_scan = BTreeMap::new();
+            for (meta, snapshot) in &history {
+                let found = store.load_insights(meta).or_else(|| {
+                    // Made before this existed, and it may be all there is to show.
+                    let newest = history
+                        .last()
+                        .is_some_and(|(m, _)| m.scan_id == meta.scan_id);
+                    if newest {
+                        insights::from_snapshot(snapshot)
+                    } else {
+                        None
+                    }
+                });
+                if let Some(found) = found {
+                    insights_by_scan.insert(meta.scan_id.clone(), found);
+                }
+            }
+            let mut records = store.load_records(key);
+            // Long-term comparison only needs the two ends, among scans of one engine.
+            let newest_engine = records.last().map(|r| r.engine.clone());
+            let first_alike = records
+                .iter()
+                .position(|r| Some(&r.engine) == newest_engine.as_ref() && !r.top.is_empty());
+            let newest_record = records.len().saturating_sub(1);
+            for (i, record) in records.iter_mut().enumerate() {
+                if Some(i) != first_alike && i != newest_record {
+                    record.top = Vec::new();
                 }
             }
             VolumeReport {
@@ -295,6 +351,8 @@ pub fn report_data(store: &Store, run: Option<&RunRecord>, connected: &[Volume])
                 snapshots: history.iter().map(|(meta, _)| meta.into()).collect(),
                 table,
                 file_changes,
+                insights: insights_by_scan,
+                records,
                 issues,
             }
         })
@@ -314,15 +372,21 @@ pub fn report_data(store: &Store, run: Option<&RunRecord>, connected: &[Volume])
                 snapshots: Vec::new(),
                 table: NodeTable::default(),
                 file_changes: BTreeMap::new(),
+                insights: BTreeMap::new(),
+                records: Vec::new(),
                 issues: Vec::new(),
             });
         }
     }
+    // A disk long gone with nothing left to show but a line of numbers is not news.
+    volumes.retain(|v| v.connected || !v.snapshots.is_empty() || v.this_run.is_some());
     volumes.sort_by_key(|v| (!v.connected, v.letter));
     ReportData {
-        format: 1,
+        format: 2,
         app_version: env!("CARGO_PKG_VERSION"),
         generated_at: now_unix(),
+        theme: store.load_settings().theme,
+        footprint: store.footprint(),
         run: run.cloned(),
         volumes,
     }
@@ -334,9 +398,19 @@ pub fn write_report(
     run: &mut RunRecord,
     connected: &[Volume],
 ) -> Result<PathBuf, String> {
-    let data = report_data(store, Some(run), connected);
+    let mut data = report_data(store, Some(run), connected);
+    // Make room for the page first, and let it say truthfully what is kept once it
+    // is there. Its size barely changes when those few numbers do.
+    let draft = report::render(&data).map_err(|e| e.to_string())?;
+    let size = draft.len() as u64;
+    store.enforce(store.data_budget().saturating_sub(size));
+    data.footprint = store.footprint();
+    data.footprint.reports += size;
+    data.footprint.total += size;
+    data.footprint.reports_kept = (data.footprint.reports_kept + 1).min(KEEP_REPORTS);
     let html = report::render(&data).map_err(|e| e.to_string())?;
     let path = store.write_report(&html).map_err(|e| e.to_string())?;
+    store.enforce(store.data_budget());
     run.report_file = path.file_name().map(|n| n.to_string_lossy().into_owned());
     store
         .save_run(&run.scan_id, run)

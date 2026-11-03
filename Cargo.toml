@@ -14,3 +14,21 @@ rust-version = "1.80"
 lto = true
 codegen-units = 1
 strip = true
+# Small everywhere, but fast where scanning happens: the program counts towards
+# Diskly's 50 MB limit, and the window's libraries have no hot loops.
+opt-level = "s"
+
+[profile.release.package.diskghost-core]
+opt-level = 3
+
+[profile.release.package.diskly-core]
+opt-level = 3
+
+[profile.release.package.rayon-core]
+opt-level = 3
+
+[profile.release.package.zstd-sys]
+opt-level = 3
+
+[profile.release.package.blake3]
+opt-level = 3

@@ -794,7 +794,7 @@ dependencies = [
 
 [[package]]
 name = "diskly"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "diskghost-core",
  "diskly-core",
@@ -807,7 +807,7 @@ dependencies = [
 
 [[package]]
 name = "diskly-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "diskghost-core",
