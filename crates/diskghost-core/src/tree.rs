@@ -74,6 +74,8 @@ pub struct ScanTree {
     mft_fallback: Option<String>,
     disk_total: u64,
     disk_free: u64,
+    /// Directories that could not be listed, and do still exist.
+    unlistable: Vec<usize>,
 }
 
 /// Puts batches from the walk into the tree as they arrive (in any order).
@@ -136,6 +138,9 @@ impl Builder {
         let id = self.dir_id(&batch.dir);
         self.pending.remove(&batch.dir);
         self.tree.skipped += batch.skipped;
+        if batch.unlistable {
+            self.tree.unlistable.push(id);
+        }
 
         // Children already here were created early, by a batch from deeper
         // down that arrived first; don't create them twice.
@@ -378,6 +383,7 @@ impl ScanTree {
                 mft_fallback: None,
                 disk_total: 0,
                 disk_free: 0,
+                unlistable: Vec::new(),
             },
             pending: HashMap::new(),
             ext_ids: HashMap::new(),
@@ -412,6 +418,7 @@ impl ScanTree {
                 mft_fallback: None,
                 disk_total: 0,
                 disk_free: 0,
+                unlistable: Vec::new(),
             },
             pending: HashMap::new(),
             ext_ids: HashMap::new(),
@@ -450,6 +457,13 @@ impl ScanTree {
     /// The directory this tree was built from.
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The directories that could not be listed, as the walk found them. They
+    /// count as read and empty everywhere else in this tree, so a caller comparing
+    /// scans needs to know.
+    pub fn unlistable_dirs(&self) -> Vec<PathBuf> {
+        self.unlistable.iter().map(|&id| self.path_of(id)).collect()
     }
 
     /// Node id of the directory `path`, if it is in the tree.
@@ -1095,6 +1109,7 @@ mod tests {
             subdirs: subdirs.iter().map(PathBuf::from).collect(),
             others: Vec::new(),
             skipped: 0,
+            unlistable: false,
         };
         let mut b = Builder {
             tree: ScanTree {
@@ -1107,6 +1122,7 @@ mod tests {
                 mft_fallback: None,
                 disk_total: 0,
                 disk_free: 0,
+                unlistable: Vec::new(),
             },
             pending: HashMap::new(),
             ext_ids: HashMap::new(),

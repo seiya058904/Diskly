@@ -331,6 +331,14 @@ pub(crate) fn is_excluded(glob: &globset::GlobSet, root: &Path, path: &Path) -> 
         .any(|c| glob.is_match(c.as_os_str()))
 }
 
+/// Only these attributes can make on-disk size diverge from the logical length.
+/// For the overwhelmingly common normal file we skip the extra syscall and use
+/// the length we already have: sparse, reparse point, compressed, offline, recall
+/// on open and recall on data access.
+#[cfg(windows)]
+pub(crate) const WEIRD_ATTRIBUTES: u32 =
+    0x0000_0200 | 0x0000_0400 | 0x0000_0800 | 0x0000_1000 | 0x0004_0000 | 0x0040_0000;
+
 /// Bytes a file actually occupies on disk, as opposed to its logical length
 /// ([`std::fs::Metadata::len`]). The two differ for sparse files, filesystem
 /// compression, and — the case that matters most here — cloud placeholders
@@ -340,20 +348,7 @@ pub(crate) fn is_excluded(glob: &globset::GlobSet, root: &Path, path: &Path) -> 
 #[cfg(windows)]
 pub(crate) fn on_disk_size(meta: &std::fs::Metadata, path: &Path) -> u64 {
     use std::os::windows::fs::MetadataExt;
-    // Only these attributes can make on-disk size diverge from the logical
-    // length. For the overwhelmingly common normal file we skip the extra
-    // syscall and use the length we already have, keeping the scan hot path
-    // exactly as cheap as before.
-    const SPARSE: u32 = 0x0000_0200;
-    const REPARSE_POINT: u32 = 0x0000_0400;
-    const COMPRESSED: u32 = 0x0000_0800;
-    const OFFLINE: u32 = 0x0000_1000;
-    const RECALL_ON_OPEN: u32 = 0x0004_0000;
-    const RECALL_ON_DATA_ACCESS: u32 = 0x0040_0000;
-    const WEIRD: u32 =
-        SPARSE | REPARSE_POINT | COMPRESSED | OFFLINE | RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS;
-
-    if meta.file_attributes() & WEIRD != 0 {
+    if meta.file_attributes() & WEIRD_ATTRIBUTES != 0 {
         if let Some(actual) = compressed_size(path) {
             return actual;
         }
