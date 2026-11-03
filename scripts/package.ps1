@@ -32,7 +32,8 @@ $sums = foreach ($name in "Diskly-$version-setup.exe", "Diskly-$version-portable
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $dist $name)).Hash.ToLowerInvariant()
     "$hash  $name"
 }
-[IO.File]::WriteAllLines((Join-Path $dist 'SHA256SUMS.txt'), [string[]]$sums)
+# LF line ends: with CRLF, sha256sum -c takes the \r for part of the file name.
+[IO.File]::WriteAllText((Join-Path $dist 'SHA256SUMS.txt'), (($sums -join "`n") + "`n"))
 
 Get-ChildItem -LiteralPath $dist -File | Select-Object Name, @{ n = 'MB'; e = { [Math]::Round($_.Length / 1MB, 2) } } | Format-Table -AutoSize
 $sums

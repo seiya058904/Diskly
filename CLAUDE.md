@@ -45,4 +45,6 @@ Check UI by looking at it: `scripts/e2e/shots.mjs` for the report, `capture-wind
 
 ## Publishing
 
-Commit in single-purpose steps; never force-push. Pushing a `v*` tag builds a draft release, and it needs the owner's explicit approval each time, with the version and test results reported first. Never commit real scan output or screenshots of real reports: the README's report pictures come from `scripts/demo/demo-data.js`, and `scripts/e2e/readme-shots.mjs` remakes them.
+Commit in single-purpose steps; never force-push. Pushing a `v*` tag builds a draft release, and it needs the owner's explicit approval each time, with the version and test results reported first. Before publishing a draft, download its files and run `app.e2e.mjs basic` on them: CI checks out CRLF line ends, so a CI build can differ from a local one.
+
+Never use `git push --tags`. This clone holds Diskghost's own tags (`v0.1.0` to `v0.12.0`), under names Diskly's versions also use. Push a release tag explicitly: `git push origin <commit>:refs/tags/vX.Y.Z`. Never commit real scan output or screenshots of real reports: the README's report pictures come from `scripts/demo/demo-data.js`, and `scripts/e2e/readme-shots.mjs` remakes them.
