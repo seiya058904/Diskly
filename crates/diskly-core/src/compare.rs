@@ -55,7 +55,6 @@ pub struct NodeTable {
     pub parents: Vec<i32>,
     /// Per snapshot, per node: its size, or null if not in that snapshot.
     pub sizes: Vec<Vec<Option<u64>>>,
-    pub files: Vec<Vec<Option<u64>>>,
     /// Per snapshot, the nodes that could not be read.
     pub unread: Vec<Vec<u32>>,
 }
@@ -117,7 +116,7 @@ pub fn build_table(
     history: &[(SnapshotMeta, Snapshot)],
     limit: usize,
 ) -> Result<NodeTable, String> {
-    type Row = (String, u64, u64);
+    type Row = (String, u64);
     let rows: Vec<Vec<Row>> = history
         .par_iter()
         .map(|(_, snapshot)| {
@@ -126,7 +125,7 @@ pub fn build_table(
                 .into_iter()
                 .filter_map(|d| {
                     let rel = relative_path(&snapshot.root, &d.path)?;
-                    (!rel.is_empty()).then_some((rel, d.size, d.file_count))
+                    (!rel.is_empty()).then_some((rel, d.size))
                 })
                 .collect())
         })
@@ -134,7 +133,7 @@ pub fn build_table(
 
     let mut stats: HashMap<&str, PathStats> = HashMap::new();
     for (s, list) in rows.iter().enumerate() {
-        for (rel, size, _) in list {
+        for (rel, size) in list {
             stats.entry(rel.as_str()).or_default().update(s, *size);
         }
     }
@@ -194,17 +193,13 @@ pub fn build_table(
 
     for (s, (meta, snapshot)) in history.iter().enumerate() {
         let mut sizes = vec![None; table.names.len()];
-        let mut files = vec![None; table.names.len()];
         sizes[0] = Some(snapshot.total_size);
-        files[0] = Some(snapshot.total_files);
-        for (rel, size, count) in &rows[s] {
+        for (rel, size) in &rows[s] {
             if let Some(&i) = index.get(rel.as_str()) {
                 sizes[i as usize] = Some(*size);
-                files[i as usize] = Some(*count);
             }
         }
         table.sizes.push(sizes);
-        table.files.push(files);
         table.unread.push(
             meta.summary
                 .unread_dirs

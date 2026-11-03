@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: &docs
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - "NOTICE"
+  pull_request:
+    paths-ignore: *docs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: node --test report/lib.test.js
+      - name: The report in a real browser
+        shell: pwsh
+        run: |
+          ./scripts/e2e/build-demo.ps1 -Out "$env:RUNNER_TEMP\demo"
+          node scripts/e2e/report.e2e.mjs "$env:RUNNER_TEMP\demo" "$env:RUNNER_TEMP\shots"

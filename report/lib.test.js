@@ -65,7 +65,6 @@ function volumeOf(rows, options) {
       names,
       parents,
       sizes,
-      files: sizes,
       unread: (unread || snapshots.map(() => [])).map((list) => list.map((p) => index.get(p))),
     },
     file_changes: {},

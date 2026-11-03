@@ -50,12 +50,12 @@ C: and D: are separate NVMe drives. Scanning both in parallel takes about as lon
 |---|---:|---:|
 | Peak working set, walk at 4 threads | 86 MB | about 30 MB |
 | Peak working set, MFT, upstream | 320 MB | 175 MB |
-| Peak working set, MFT, with the patch before its memory fix | 408 MB | 175 MB |
+| Peak working set, MFT, with the final patch | 326 MB | 175 MB |
 | Snapshot on disk | 6.3 MB | 1.2 MB |
 | Capture / save / load | 0.14 s / 5 ms / 15 ms | 26 ms / 2 ms / 19 ms |
 | Read all folders / compare two snapshots | 0.11 s / 0.12 s | 17 ms / 25 ms |
 
-The patch's memory fix (below) was applied after these runs, so the 408 MB figure is an upper bound. It is measured again on the finished app.
+A first version of the patch peaked at 408 MB, because it kept every 8.3 alias. The final one drops an alias as soon as the long name is in the same record.
 
 ## Correctness
 
@@ -147,6 +147,36 @@ The patch is confined to `crates/diskghost-core/src/mft.rs`, and has unit tests.
 - **Totals:** the report states that folder totals count each hard-link name and can exceed the system's used space.
 - **Unknown folders:** a folder that could not be read in either scan is unknown, with everything below it, and never counts as a change.
 - **Speed claims:** this report supports "about 1.3 s for 600 k files on an NVMe SSD, as administrator, with a warm cache". It does not support a general "seconds" claim.
+
+## The finished app
+
+Release build of Diskly 0.1.0, same machine, after the app was built. By then C: and D: held about 604,000 and 131,000 files. This is the whole scan through the real window: both disks in parallel, snapshots captured, and for a normal scan the unreadable-folder check.
+
+| Whole scan, C: and D: | Runs | Seconds |
+|---|---:|---:|
+| Fast (MFT, through the elevated helper) | 4 | 1.36, 1.42, 1.43, 2.48 |
+| Normal (walk, 4 threads per disk) | 3 | 6.75, 7.20, 7.72 |
+
+The 2.48 s fast run came after other work had pushed the MFT out of the cache.
+
+Real Windows prompts, read from the run records:
+
+| Time before the answer | Result |
+|---|---|
+| 5 s, 11 s | Fast scan completed |
+| 33 s, 51 s | Fast scan completed, and the scan time excludes the wait. An earlier build cancelled itself after 20 s |
+| 123 s, unanswered | Windows times out as a refusal: normal scan, reason recorded, report written |
+
+**Not tested:** clicking "No" by hand. It should give the same error as the timeout, which is what ran. The window's message for it was checked with a simulated event.
+
+Known changes on a real disk were reported to the byte: a 300 MB file added and a 120 MB file removed gave +300 MB, -120 MB and a headline of +180 MB, with both scan types.
+
+| Size | |
+|---|---:|
+| Installer | 2.5 MB |
+| Portable executable | 10.5 MB |
+| Report, real disks, about 8 scans | 4.5 MB before an unused column was removed |
+| Report at the limit of 20,000 folders, 4 scans | 1.6 MB |
 
 ## Risks that remain
 

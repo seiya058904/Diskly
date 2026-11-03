@@ -24,7 +24,7 @@ const lib = createRequire(import.meta.url)(join(repo, "report", "lib.js"));
 
 const MB = 1024 * 1024;
 const PORT = 9333;
-const dataDir = join(work, "app-data", "Diskly");
+const dataDir = join(work, "app-data", "Diskly", "Data");
 const shots = join(work, "shots");
 const scratch = join(repo, "target", "e2e-scratch");
 mkdirSync(dataDir, { recursive: true });

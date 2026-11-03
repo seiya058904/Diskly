@@ -1,0 +1,6 @@
+{"volume":"C","run":1,"seconds":3.215,"peak_mb":326.2,"result":"mft 604509 files"}
+{"volume":"C","run":2,"seconds":1.154,"peak_mb":324.3,"result":"mft 604509 files"}
+{"volume":"C","run":3,"seconds":1.203,"peak_mb":327.4,"result":"mft 604509 files"}
+{"volume":"D","run":1,"seconds":0.638,"peak_mb":172.3,"result":"mft 130754 files"}
+{"volume":"D","run":2,"seconds":0.329,"peak_mb":175.7,"result":"mft 130754 files"}
+{"volume":"D","run":3,"seconds":0.325,"peak_mb":172.3,"result":"mft 130754 files"}

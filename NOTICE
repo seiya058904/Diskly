@@ -14,6 +14,8 @@ What comes from Diskghost:
 - crates/diskghost-core: the scanning, MFT and snapshot engine. Changed in one
   place, crates/diskghost-core/src/mft.rs, to fix folders counted twice. See
   docs/benchmarks/2026-11-core-acceptance.md for the evidence.
+- app/src-tauri/src/helper.rs: adapted from Diskghost's gui/src-tauri/src/helper.rs.
+  It takes its instructions differently, for safety; see the top of that file.
 
 Diskghost's GUI, command line tool, duplicate finder and delete features are not
 part of Diskly. The core library still contains its delete functions, because it

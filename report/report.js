@@ -135,11 +135,10 @@
     const options = [{ key: "all", label: "全部" }];
     for (const v of data.volumes) if (v.key) options.push({ key: v.key, label: `${v.letter}:` });
     const segments = options.length > 2
-      ? el("div", { class: "segments", role: "radiogroup", "aria-label": "选择磁盘" },
+      ? el("div", { class: "segments", role: "group", "aria-label": "选择磁盘" },
         ...options.map((o) => el("button", {
           type: "button",
-          role: "radio",
-          "aria-checked": String(ui.filter === o.key),
+          "aria-pressed": String(ui.filter === o.key),
           text: o.label,
           onclick: () => setFilter(o.key),
         })))
@@ -406,9 +405,9 @@
     const node = current ? (ui.browse && ui.browse.key === current.volume.key ? ui.browse.node : 0) : 0;
 
     const sortControl = current && current.cmp
-      ? el("div", { class: "segments", role: "radiogroup", "aria-label": "排序方式" },
+      ? el("div", { class: "segments", role: "group", "aria-label": "排序方式" },
         ...[["size", "按大小"], ["change", "按变化"]].map(([value, label]) => el("button", {
-          type: "button", role: "radio", "aria-checked": String(ui.sort === value), text: label,
+          type: "button", "aria-pressed": String(ui.sort === value), text: label,
           onclick: () => { ui.sort = value; render(); },
         })))
       : null;
@@ -493,9 +492,9 @@
     const section = el("section", { id: "files" }, el("h2", { text: "文件" }));
     if (usable) {
       const tabs = [["added", "新增"], ["removed", "删除"], ["changed", "大小变化"]];
-      const tabBar = el("div", { class: "segments", role: "radiogroup", "aria-label": "文件变化类型" },
+      const tabBar = el("div", { class: "segments", role: "group", "aria-label": "文件变化类型" },
         ...tabs.map(([kind, label]) => el("button", {
-          type: "button", role: "radio", "aria-checked": String(ui.fileTab === kind), text: `${label} ${L.formatCount(counts[kind])}`,
+          type: "button", "aria-pressed": String(ui.fileTab === kind), text: `${label} ${L.formatCount(counts[kind])}`,
           onclick: () => { ui.fileTab = kind; ui.filesShown = 12; render(); },
         })));
       const list = lists[ui.fileTab].slice().sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));

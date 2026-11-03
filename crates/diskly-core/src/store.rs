@@ -141,9 +141,10 @@ pub struct Store {
 }
 
 impl Store {
-    /// `%LOCALAPPDATA%\Diskly`.
+    /// `%LOCALAPPDATA%\Diskly\Data`. The installer puts the program in the folder
+    /// above, and an uninstall leaves this one alone.
     pub fn default_root() -> Option<PathBuf> {
-        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Diskly"))
+        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Diskly").join("Data"))
     }
 
     pub fn open(root: impl Into<PathBuf>) -> io::Result<Store> {

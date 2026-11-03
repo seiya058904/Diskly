@@ -37,7 +37,7 @@ struct Home {
     mica: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn home(state: State<AppState>) -> Home {
     Home {
         volumes: fixed_volumes(),
@@ -89,7 +89,7 @@ fn cancel_scan(state: State<AppState>) {
     state.control.request_cancel();
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_runs(state: State<AppState>) -> Vec<RunRecord> {
     state.store.list_runs()
 }

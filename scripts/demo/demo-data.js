@@ -32,14 +32,12 @@ function tableOf(rows, count, unread) {
     index.set(path, names.length - 1);
   }
   const sizes = [];
-  const files = [];
   for (let s = 0; s < count; s += 1) {
     const top = sorted.filter(([p]) => !p.includes("\\")).reduce((sum, row) => sum + (row[s + 1] ?? 0), 0);
     sizes.push([top, ...sorted.map((row) => row[s + 1])]);
-    files.push(sizes[s].map((v) => (v === null ? null : Math.round(v / (2 * MB)))));
   }
   return {
-    names, parents, sizes, files,
+    names, parents, sizes,
     unread: (unread || Array(count).fill([])).map((list) => list.map((p) => index.get(p))),
   };
 }

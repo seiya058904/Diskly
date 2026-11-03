@@ -81,11 +81,12 @@ fn is_helper_folder(dir: &Path) -> bool {
         std::fs::symlink_metadata(p)
             .is_ok_and(|m| m.is_dir() && m.file_attributes() & REPARSE_POINT == 0)
     };
+    let data = dir.parent();
+    let product = data.and_then(Path::parent);
     dir.is_absolute()
         && dir.file_name() == Some(OsStr::new("helper"))
-        && dir
-            .parent()
-            .is_some_and(|p| p.file_name() == Some(OsStr::new("Diskly")) && plain(p))
+        && data.is_some_and(|p| p.file_name() == Some(OsStr::new("Data")) && plain(p))
+        && product.is_some_and(|p| p.file_name() == Some(OsStr::new("Diskly")) && plain(p))
         && plain(dir)
 }
 
@@ -360,18 +361,20 @@ mod tests {
     #[test]
     fn only_a_plain_helper_folder_in_a_diskly_folder_is_accepted() {
         let base = std::env::temp_dir().join(format!("diskly-helper-test-{}", std::process::id()));
-        let good = base.join("Diskly").join("helper");
+        let good = base.join("Diskly").join("Data").join("helper");
         std::fs::create_dir_all(&good).unwrap();
-        let wrong = base.join("Other").join("helper");
+        let wrong = base.join("Other").join("Data").join("helper");
         std::fs::create_dir_all(&wrong).unwrap();
         assert!(is_helper_folder(&good));
         assert!(!is_helper_folder(&wrong));
-        assert!(!is_helper_folder(Path::new(r"Diskly\helper")));
-        assert!(!is_helper_folder(&base.join("Diskly").join("nope")));
+        assert!(!is_helper_folder(Path::new(r"Diskly\Data\helper")));
+        assert!(!is_helper_folder(
+            &base.join("Diskly").join("Data").join("nope")
+        ));
 
         let target = base.join("target");
         std::fs::create_dir_all(&target).unwrap();
-        let linked = base.join("Linked").join("Diskly");
+        let linked = base.join("Linked").join("Diskly").join("Data");
         std::fs::create_dir_all(&linked).unwrap();
         let junction = linked.join("helper");
         let made = std::process::Command::new("cmd")

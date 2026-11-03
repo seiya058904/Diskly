@@ -186,8 +186,9 @@ mod tests {
 
     #[test]
     fn this_machine_can_name_a_browser() {
-        // A Windows machine always has a handler for web addresses, Edge at the least.
-        let command = default_browser_command().expect("no handler for http");
-        assert!(split_command(&command).is_some(), "{command}");
+        // A server image may have none; then the file association is used instead.
+        if let Some(command) = default_browser_command() {
+            assert!(split_command(&command).is_some(), "{command}");
+        }
     }
 }
