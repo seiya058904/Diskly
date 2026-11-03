@@ -237,6 +237,9 @@ struct Rec {
     is_dir: bool,
     /// (parent record, name) per non-DOS file name — several for hard links.
     names: Vec<(u64, OsString)>,
+    /// 8.3 aliases. The long name they stand for can sit in another record of
+    /// the same file, so they are only used once all records are merged.
+    dos_names: Vec<(u64, OsString)>,
     attributes: u32,
     modified: u64,
     /// A symbolic link, junction or other name surrogate: never followed.
@@ -260,7 +263,6 @@ fn parse(index: u64, rec: &[u8]) -> Option<Rec> {
         is_dir: flags & 2 != 0,
         ..Rec::default()
     };
-    let mut dos_names: Vec<(u64, OsString)> = Vec::new();
     let mut units: Vec<u16> = Vec::new();
     for a in attrs(rec) {
         match a.kind {
@@ -287,7 +289,7 @@ fn parse(index: u64, rec: &[u8]) -> Option<Rec> {
                 );
                 let name = OsString::from_wide(&units);
                 if space == 2 {
-                    dos_names.push((parent, name)); // 8.3 alias of a long name
+                    r.dos_names.push((parent, name)); // 8.3 alias of a long name
                 } else {
                     r.names.push((parent, name));
                 }
@@ -321,8 +323,8 @@ fn parse(index: u64, rec: &[u8]) -> Option<Rec> {
             _ => {}
         }
     }
-    if r.names.is_empty() {
-        r.names = dos_names; // a name that only exists in 8.3 form
+    if !r.names.is_empty() {
+        r.dos_names = Vec::new(); // the long name is here: never needed
     }
     Some(r)
 }
@@ -331,6 +333,8 @@ fn parse(index: u64, rec: &[u8]) -> Option<Rec> {
 struct Node {
     is_dir: bool,
     names: Vec<(u64, OsString)>,
+    /// From the base record: the only one with standard information.
+    attributes: u32,
     modified: u64,
     surrogate: bool,
     /// A reparse point that is not a link — a cloud placeholder (OneDrive …):
@@ -489,9 +493,17 @@ fn read_table(
         .collect::<Result<_, std::io::Error>>()?;
     trace.mark(&format!("read + parse {} MB", table_size >> 20));
 
-    // Merge extension records into their base records.
+    let nodes = merge_records(parsed, record_no as usize);
+    trace.mark("merge records");
+    Ok(nodes)
+}
+
+/// Merge extension records into their base records; the result is indexed by
+/// record number.
+fn merge_records(parsed: Vec<Vec<(u64, Rec)>>, records: usize) -> Vec<Option<Node>> {
     let mut nodes: Vec<Option<Node>> = Vec::new();
-    nodes.resize_with(record_no as usize, || None);
+    nodes.resize_with(records, || None);
+    let mut dos_names: Vec<(usize, Vec<(u64, OsString)>)> = Vec::new();
     let mut extensions = Vec::new();
     for (index, r) in parsed.into_iter().flatten() {
         if r.base != index {
@@ -501,9 +513,13 @@ fn read_table(
         let Some(slot) = nodes.get_mut(index as usize) else {
             continue;
         };
+        if !r.dos_names.is_empty() {
+            dos_names.push((index as usize, r.dos_names));
+        }
         *slot = Some(Node {
             is_dir: r.is_dir,
             names: r.names,
+            attributes: r.attributes,
             modified: r.modified,
             surrogate: r.surrogate,
             cloud: r.reparse && !r.surrogate,
@@ -513,15 +529,26 @@ fn read_table(
     for r in extensions {
         if let Some(Some(n)) = nodes.get_mut(r.base as usize) {
             n.names.extend(r.names);
+            if !r.dos_names.is_empty() {
+                dos_names.push((r.base as usize, r.dos_names));
+            }
             if r.data.is_some() && n.size == (0, 0) {
-                n.size = size_of(r.data, r.attributes, r.reparse);
+                n.size = size_of(r.data, n.attributes, r.reparse);
             }
             n.surrogate |= r.surrogate;
             n.cloud |= r.reparse && !r.surrogate;
         }
     }
-    trace.mark("merge records");
-    Ok(nodes)
+    // A name that only exists in 8.3 form. An alias of a long name must not
+    // become an entry of its own: a folder would be counted twice.
+    for (index, aliases) in dos_names {
+        if let Some(Some(n)) = nodes.get_mut(index) {
+            if n.names.is_empty() {
+                n.names = aliases;
+            }
+        }
+    }
+    nodes
 }
 
 /// (on-disk, logical) size like the walk reports it: the logical length,
@@ -765,5 +792,83 @@ pub(crate) fn walk_cloud(
             continue;
         }
         let _ = crate::walk::walk_dyn(dir, &local, progress, sink);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(list: &[(u64, &str)]) -> Vec<(u64, OsString)> {
+        list.iter().map(|(p, n)| (*p, OsString::from(n))).collect()
+    }
+
+    #[test]
+    fn a_long_name_in_an_extension_record_replaces_the_8_3_alias() {
+        // The base record holds only the alias, the long name sits in an
+        // extension record: one entry, or the folder is counted twice.
+        let base = Rec {
+            base: 30,
+            is_dir: true,
+            dos_names: names(&[(5, "AMF325~1.782")]),
+            ..Rec::default()
+        };
+        let ext = Rec {
+            base: 30,
+            names: names(&[(5, "amd64_a_long_folder_name")]),
+            ..Rec::default()
+        };
+        let nodes = merge_records(vec![vec![(30, base), (31, ext)]], 40);
+        let node = nodes[30].as_ref().unwrap();
+        assert_eq!(node.names, names(&[(5, "amd64_a_long_folder_name")]));
+    }
+
+    #[test]
+    fn an_alias_in_an_extension_record_is_not_an_entry_either() {
+        let base = Rec {
+            base: 30,
+            names: names(&[(5, "a long name")]),
+            ..Rec::default()
+        };
+        let ext = Rec {
+            base: 30,
+            dos_names: names(&[(5, "ALONGN~1")]),
+            ..Rec::default()
+        };
+        let nodes = merge_records(vec![vec![(30, base), (31, ext)]], 40);
+        assert_eq!(
+            nodes[30].as_ref().unwrap().names,
+            names(&[(5, "a long name")])
+        );
+    }
+
+    #[test]
+    fn a_name_that_only_exists_in_8_3_form_is_kept() {
+        let base = Rec {
+            base: 30,
+            dos_names: names(&[(5, "SHORT~1")]),
+            ..Rec::default()
+        };
+        let nodes = merge_records(vec![vec![(30, base)]], 40);
+        assert_eq!(nodes[30].as_ref().unwrap().names, names(&[(5, "SHORT~1")]));
+    }
+
+    #[test]
+    fn data_in_an_extension_record_uses_the_attributes_of_the_base_record() {
+        // Compressed file, data stream moved out of the base record: its
+        // on-disk size counts, not its logical length.
+        let base = Rec {
+            base: 30,
+            names: names(&[(5, "compressed.xml")]),
+            attributes: 0x800,
+            ..Rec::default()
+        };
+        let ext = Rec {
+            base: 30,
+            data: Some((28_444_464, 7_344_128)),
+            ..Rec::default()
+        };
+        let nodes = merge_records(vec![vec![(30, base), (31, ext)]], 40);
+        assert_eq!(nodes[30].as_ref().unwrap().size, (7_344_128, 28_444_464));
     }
 }
