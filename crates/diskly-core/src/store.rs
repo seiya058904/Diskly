@@ -297,6 +297,25 @@ impl Store {
         }
     }
 
+    /// Remove what a helper session left behind if the app crashed during it.
+    /// Younger files may belong to a helper that is still running.
+    pub fn clear_stale_helper_files(&self, older_than: std::time::Duration) {
+        let entries = fs::read_dir(self.helper_dir())
+            .into_iter()
+            .flatten()
+            .flatten();
+        for entry in entries {
+            let age = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| SystemTime::now().duration_since(t).ok());
+            if age.is_some_and(|a| a > older_than) {
+                let _ = self.remove_own_file(&entry.path());
+            }
+        }
+    }
+
     /// Remove a file of this store. Refuses anything but a plain file of an
     /// expected kind, directly in a volume's history folder or the helper folder.
     fn remove_own_file(&self, path: &Path) -> io::Result<()> {

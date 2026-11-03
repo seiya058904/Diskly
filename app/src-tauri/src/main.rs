@@ -111,7 +111,7 @@ fn open_report(scan_id: String, state: State<AppState>) -> Result<(), String> {
         Some(path) => path,
         None => write_report(store, &mut run, &fixed_volumes())?,
     };
-    shell::open_file(&path)
+    shell::open_in_browser(&path)
 }
 
 #[tauri::command]

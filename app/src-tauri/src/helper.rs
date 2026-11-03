@@ -15,7 +15,7 @@
 //!
 //! | file                 | from   | content                                   |
 //! |----------------------|--------|-------------------------------------------|
-//! | `<t>-alive.json`     | app    | touched every few seconds; stale = stop   |
+//! | `<t>-alive.json`     | both   | helper creates, app touches; stale = stop |
 //! | `<t>-cancel.json`    | app    | exists = stop                             |
 //! | `<t>-beat.json`      | helper | touched while it runs; stale = it died    |
 //! | `<t>-progress.json`  | helper | counts per volume                         |
@@ -109,6 +109,9 @@ pub fn serve(args: &[String]) -> i32 {
         return 2;
     }
     let file = |what: &str| dir.join(format!("{token}-{what}"));
+    // Written here, not by the app: the user may take any time to answer the
+    // prompt, and that must not look like the app having gone away.
+    touch(&file("alive.json"));
 
     let jobs: Vec<(Volume, Progress, Arc<AtomicU8>)> = volumes
         .into_iter()
@@ -241,8 +244,6 @@ impl Helper {
     pub fn start(dir: PathBuf, letters: &str, owner: HWND) -> Result<Helper, StartError> {
         std::fs::create_dir_all(&dir).map_err(|e| StartError::Failed(e.to_string()))?;
         let token = random_token();
-        touch(&dir.join(format!("{token}-alive.json")));
-
         let exe = std::env::current_exe().map_err(|e| StartError::Failed(e.to_string()))?;
         let params = format!("--mft-helper \"{}\" {token} {letters}", dir.display());
         let (verb, file, params) = (

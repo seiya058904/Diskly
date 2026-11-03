@@ -14,7 +14,7 @@ use tauri::ipc::Channel;
 use windows_sys::Win32::Foundation::HWND;
 
 use crate::helper::{Helper, StartError};
-use crate::shell::open_file;
+use crate::shell::open_in_browser;
 
 const WAITING: u8 = 0;
 const SCANNING: u8 = 1;
@@ -148,6 +148,25 @@ impl Control {
 
 type ScanResult = (ScanSummary, Option<Snapshot>);
 
+/// Scan time. Waiting for the user to answer a prompt is not part of it.
+struct Clock(Mutex<Instant>);
+
+impl Clock {
+    fn new() -> Clock {
+        Clock(Mutex::new(Instant::now()))
+    }
+
+    fn restart(&self) {
+        if let Ok(mut started) = self.0.lock() {
+            *started = Instant::now();
+        }
+    }
+
+    fn seconds(&self) -> f64 {
+        self.0.lock().map_or(0.0, |s| s.elapsed().as_secs_f64())
+    }
+}
+
 fn walk_track(track: &Track) -> ScanResult {
     track.set_state(SCANNING);
     let result = scan_root(&track.volume.root, false, &track.progress);
@@ -219,6 +238,7 @@ fn scan_fast(
     control: &Arc<Control>,
     owner: HWND,
     phase: &Mutex<&'static str>,
+    clock: &Clock,
 ) -> (Vec<ScanResult>, bool) {
     if is_elevated() {
         // Already administrator: no prompt, no helper.
@@ -239,8 +259,11 @@ fn scan_fast(
         return (results, false);
     }
     let letters: String = tracks.iter().map(|t| t.volume.letter).collect();
+    store.clear_stale_helper_files(Duration::from_secs(3600));
     let dir = store.helper_dir();
-    match Helper::start(dir, &letters, owner) {
+    let started = Helper::start(dir, &letters, owner);
+    clock.restart();
+    match started {
         Err(StartError::Declined) => {
             set_phase(phase, "scanning");
             let reason = "没有获得管理员权限";
@@ -255,13 +278,17 @@ fn scan_fast(
             let results = scan_with_helper(&helper, tracks, control);
             store.clear_helper_files(helper.token());
             // Whatever the helper left undone is walked, unless the user stopped it.
+            let cancelled = control.cancel.load(Ordering::Relaxed);
+            let results: Vec<Option<ScanResult>> = results
+                .into_iter()
+                .map(|r| r.filter(|(s, _)| cancelled || s.status != ScanStatus::Cancelled))
+                .collect();
             let missing: Vec<Arc<Track>> = tracks
                 .iter()
                 .zip(&results)
                 .filter(|(_, r)| r.is_none())
                 .map(|(t, _)| t.clone())
                 .collect();
-            let cancelled = control.cancel.load(Ordering::Relaxed);
             let mut walked = if missing.is_empty() || cancelled {
                 Vec::new()
             } else {
@@ -301,7 +328,7 @@ pub fn run(
     events: Channel<ScanEvent>,
     owner: HWND,
 ) {
-    let started = Instant::now();
+    let clock = Clock::new();
     let started_at = now_unix();
     let scan_id = new_scan_id();
     let volumes = fixed_volumes();
@@ -327,14 +354,14 @@ pub fn run(
                 let current = phase.lock().map_or("scanning", |p| *p);
                 let _ = events.send(ScanEvent::Progress {
                     phase: current,
-                    seconds: started.elapsed().as_secs_f64(),
+                    seconds: clock.seconds(),
                     volumes: tracks.iter().map(|t| t.view()).collect(),
                 });
                 std::thread::sleep(Duration::from_millis(120));
             }
         });
         let outcome = if mode == "fast" {
-            scan_fast(&store, &tracks, &control, owner, &phase)
+            scan_fast(&store, &tracks, &control, owner, &phase, &clock)
         } else {
             (walk_all(&tracks, None), false)
         };
@@ -344,7 +371,7 @@ pub fn run(
     });
     let _ = events.send(ScanEvent::Progress {
         phase: "saving",
-        seconds: started.elapsed().as_secs_f64(),
+        seconds: clock.seconds(),
         volumes: tracks.iter().map(|t| t.view()).collect(),
     });
 
@@ -367,7 +394,7 @@ pub fn run(
     }
 
     let keep = store.load_settings().keep_per_volume;
-    let seconds = started.elapsed().as_secs_f64();
+    let seconds = clock.seconds();
     let cancelled = control.cancel.load(Ordering::Relaxed);
     let mut run = commit_run(
         &store, &scan_id, started_at, seconds, declined, scanned, keep,
@@ -381,7 +408,7 @@ pub fn run(
             // Tests set this so a run of them does not fill the browser with tabs.
             Ok(_) if std::env::var_os("DISKLY_NO_BROWSER").is_some() => {}
             Ok(path) if !cancelled => {
-                if let Err(e) = open_file(&path) {
+                if let Err(e) = open_in_browser(&path) {
                     error = Some(format!("报告已保存，但无法打开浏览器：{e}"));
                 }
             }
@@ -400,7 +427,7 @@ pub fn run(
     control.running.store(false, Ordering::Relaxed);
     let _ = events.send(ScanEvent::Finished {
         scan_id,
-        seconds: started.elapsed().as_secs_f64(),
+        seconds: clock.seconds(),
         cancelled,
         stored,
         declined,

@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, SystemTime};
 
 use diskghost_core::{diff, Progress};
 use diskly_core::compare::{build_table, pair_status, NodeTable, PairStatus};
@@ -460,6 +461,34 @@ fn old_snapshots_go_only_past_the_limit_and_only_our_own_files() {
         0,
         "two is the least worth keeping"
     );
+}
+
+#[test]
+fn only_old_files_of_a_helper_are_cleared_and_only_its_kinds() {
+    let data = TestDir::new("data");
+    let store = Store::open(&data.0).unwrap();
+    let dir = store.helper_dir();
+    fs::create_dir_all(&dir).unwrap();
+    let old = SystemTime::now() - Duration::from_secs(7200);
+    let aged = |name: &str| {
+        let path = dir.join(name);
+        fs::write(&path, b"x").unwrap();
+        let file = fs::File::options().write(true).open(&path).unwrap();
+        file.set_modified(old).unwrap();
+        path
+    };
+    let stale_marker = aged("abc-alive.json");
+    let stale_result = aged("abc-C.dgs");
+    let not_ours = aged("notes.txt");
+    let fresh = dir.join("def-alive.json");
+    fs::write(&fresh, b"x").unwrap();
+
+    store.clear_stale_helper_files(Duration::from_secs(3600));
+
+    assert!(!stale_marker.exists());
+    assert!(!stale_result.exists());
+    assert!(not_ours.exists(), "not a kind of file a helper writes");
+    assert!(fresh.exists(), "may belong to a helper still running");
 }
 
 #[test]

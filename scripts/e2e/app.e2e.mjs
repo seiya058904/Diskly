@@ -4,9 +4,10 @@
 //
 // node app.e2e.mjs <diskly.exe> <work folder> <phase>
 //   basic         a normal scan, a change, a second scan, cancel, history, settings
+//   browser       a normal scan that opens its report in the real default browser
 //   uac-accept    two fast scans: answer YES to both Windows prompts
 //   uac-decline   a fast scan: answer NO to the Windows prompt
-//   uac-compare   a fast scan after a known change: answer YES
+//   uac-slow      a fast scan: wait 30 seconds, then answer YES
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -146,6 +147,7 @@ async function setScanMode(mode) {
 /* ---- Phases ---- */
 
 async function basic() {
+  removeKnownFiles();
   write("grows\\keep.bin", 10 * MB);
   write("removes\\old.bin", 120 * MB);
 
@@ -296,6 +298,19 @@ async function basic() {
     await page.press("Escape", "Escape", 27);
   });
 
+  await check("the window says when a scan ran without the rights it asked for", async () => {
+    /* The scan side of this was seen on real prompts; see the acceptance report. */
+    await page.waitFor(`document.getElementById("scan-button")`);
+    await page.eval(`onScanEvent({ kind: "finished", scan_id: "x", seconds: 7.2, cancelled: false, stored: 2, declined: true, error: null, run: null })`);
+    await page.waitFor(`document.querySelector(".lead")?.textContent.includes("扫描完成")`);
+    assert.match(await lead(), /没有获得管理员权限，这次用了普通扫描/);
+    assert.match(await lead(), /7\.2 秒/);
+    capture("08-declined");
+    await page.eval("location.reload()");
+    await sleep(500);
+    await page.waitFor(`document.getElementById("scan-button")`);
+  });
+
   await check("bad input to a command is refused", async () => {
     const refused = await page.eval(`window.__TAURI__.core.invoke("start_scan", { mode: "delete", onEvent: new window.__TAURI__.core.Channel() }).then(() => false, () => true)`);
     assert.equal(refused, true);
@@ -314,6 +329,9 @@ async function basic() {
 }
 
 async function fastScan() {
+  /* In real use the window is in front when Scan is clicked. Behind other windows,
+     Windows only flashes the prompt in the taskbar. */
+  capture("fast-before");
   await page.click("#scan-button");
   await page.waitFor(`document.querySelector(".lead")?.textContent.includes("确认")`, 5000).catch(() => {});
   await waitForScanToEnd(300000);
@@ -376,13 +394,64 @@ async function uacDecline() {
   });
 }
 
+/* Answering the prompt slowly must not make the scan cancel itself. */
+async function uacSlow() {
+  await setScanMode("fast");
+  await check("a slow answer to the prompt still gives a full fast scan", async () => {
+    const asked = Date.now();
+    await fastScan();
+    const waited = (Date.now() - asked) / 1000;
+    const run = runs().at(-1);
+    assert.equal(run.consent_declined, false, "the answer was no");
+    assert.ok(run.volumes.every((v) => v.engine === "mft" && v.status === "complete" && v.stored), JSON.stringify(run.volumes));
+    assert.ok(run.seconds < 20, `scan time must not include the wait: ${run.seconds} s`);
+    assert.ok(waited > 21, `this only proves something after a 20 s wait; the answer came after ${waited.toFixed(0)} s`);
+    console.log(`      answered after about ${waited.toFixed(0)} s; scan time ${run.seconds.toFixed(2)} s`);
+  });
+}
+
+/* The whole thing as a person meets it: the report opens in their own browser. */
+function browserWindowTitles() {
+  const script = join(here, "window-titles.ps1");
+  return spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Contains", "报告"], { encoding: "utf8" }).stdout;
+}
+
+async function browserFlow() {
+  await check("a finished scan opens its report in the default browser, by itself", async () => {
+    assert.ok(!browserWindowTitles().includes("Diskly 报告"), "close Diskly reports in the browser first");
+    await setScanMode("normal");
+    await page.click("#scan-button");
+    await sleep(500);
+    await waitForScanToEnd();
+    assert.match(await lead(), /报告已在浏览器中打开/);
+    const start = Date.now();
+    while (!browserWindowTitles().includes("Diskly 报告")) {
+      assert.ok(Date.now() - start < 15000, "no browser window shows the report");
+      await sleep(400);
+    }
+  });
+  await check("the report can be opened again from the window", async () => {
+    const run = runs().at(-1);
+    assert.equal(await page.eval(`window.__TAURI__.core.invoke("open_report", { scanId: ${JSON.stringify(run.scan_id)} }).then(() => true)`), true);
+  });
+  await check("a report whose file is gone is made again", async () => {
+    const run = runs().at(-1);
+    rmSync(join(dataDir, "reports", run.report_file));
+    assert.equal(await page.eval(`window.__TAURI__.core.invoke("open_report", { scanId: ${JSON.stringify(run.scan_id)} }).then(() => true)`), true);
+    const again = runs().at(-1);
+    assert.ok(existsSync(join(dataDir, "reports", again.report_file)), again.report_file);
+  });
+}
+
 /* ---- Run ---- */
 
 try {
-  await openApp();
+  await openApp(phase === "browser" ? { DISKLY_NO_BROWSER: undefined } : {});
   if (phase === "basic") await basic();
+  else if (phase === "browser") await browserFlow();
   else if (phase === "uac-accept") await uacAccept();
   else if (phase === "uac-decline") await uacDecline();
+  else if (phase === "uac-slow") await uacSlow();
   else throw new Error(`unknown phase: ${phase}`);
 } finally {
   page?.close();
