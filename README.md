@@ -1,186 +1,257 @@
+<a id="top"></a>
+
+<p align="center">
+  <a href="https://github.com/seiya058904/Diskly/releases/latest">
+    <img src="docs/images/readme-cover.svg" width="100%" alt="Illustrated Diskly cover: Know your space — disk usage rings, a storage treemap and a dark, glass-like report preview." />
+  </a>
+</p>
+
 <h1 align="center">Diskly</h1>
 
-<p align="center"><strong>See where your disk space went, in seconds.</strong></p>
-
 <p align="center">
-  Press Scan and confirm the Windows prompt. About three seconds later, a report opens in your browser: a map of every disk, the biggest files and folders, and what changed since last time.<br>
-  It stays under 50 MB however long you use it. It only reads, and it never goes online.
+  <strong>See where your disk space went — and what changed.</strong><br />
+  A fast, read-only Windows disk analyzer with a beautiful, interactive report that works completely offline.
 </p>
 
 <p align="center">
-  <img src="docs/images/report-dark.png" width="880" alt="The Diskly report on a black page: one sentence on what changed, a ring and a bar for each disk, the biggest file and folder, and the top of the space map">
+  <a href="https://github.com/seiya058904/Diskly/releases/latest"><img src="https://img.shields.io/github/v/release/seiya058904/Diskly?style=flat-square&amp;label=release&amp;color=3987E5" alt="Latest GitHub release" /></a>
+  <img src="https://img.shields.io/badge/Windows-11%20x64-3269A3?style=flat-square" alt="Windows 11 x64" />
+  <img src="https://img.shields.io/badge/Rust-Tauri%202-576E99?style=flat-square" alt="Rust and Tauri 2" />
+  <img src="https://img.shields.io/badge/offline-read--only-2D887B?style=flat-square" alt="Offline and read only" />
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-7669A5?style=flat-square" alt="MIT license" /></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/seiya058904/Diskly/releases/latest"><strong>Download for Windows</strong></a>
-  <br><sub>Installer 2.3 MB. Portable file 8.7 MB. The interface is in Chinese.</sub>
+  <a href="https://github.com/seiya058904/Diskly/releases/latest"><strong>↓ Download for Windows</strong></a>
+  &nbsp;·&nbsp; <a href="#preview">Screenshots</a>
+  &nbsp;·&nbsp; <a href="#features">Features</a>
+  &nbsp;·&nbsp; <a href="#performance">Performance</a>
+  &nbsp;·&nbsp; <a href="#get-started">Get started</a>
+  &nbsp;·&nbsp; <a href="#development">Build</a>
 </p>
 
-## Why Diskly
+<p align="center"><sub>简体中文界面 · No account · No telemetry · No network requests · No file deletion</sub></p>
 
-### It is fast
+---
 
-Diskly reads the NTFS file table directly, the same idea that makes WizTree quick, instead of opening folders one by one.
+<a id="preview"></a>
 
-| Two NVMe disks, about 730,000 files in total | Time |
-|---|---:|
-| Fast scan (the default) | **1.5 s** |
-| Saving, and writing the report | about 1 s |
-| The report on screen | 0.35 s |
-| Normal scan, if you decline administrator rights | 5.3 s |
+## 🪟 A clearer picture of your storage
 
-These are from one machine (i7-12700H) with the disks already in the Windows cache. The first fast scan after a while took 3.7 s. A larger or slower disk takes longer. The [full measurements](docs/benchmarks/2026-11-speed-and-footprint.md) say what was and was not tested.
-
-### It stays small, for good
-
-All of Diskly stays under **50 MB**: the program, its window's cache and its data. On the machine above it takes about **26 MB**.
-
-- **It does not build up.** Over 15 real scans in a row, the data went 8.2, 11, 14, 14.6, then stayed at 14.9 MB. A test runs 300 scans and checks that nothing has grown.
-- **It cleans up after itself.** Each scan removes what is no longer needed, and only ever Diskly's own files.
-- **It shows you.** The report and the settings say what it takes now, part by part.
-
-### The report is a pleasure to read
-
-True black, in the style of iOS, with frosted glass where content passes under it. Buttons respond on a spring, rings sweep in, and clicking a folder flies into it.
-
-It is also smooth by construction. Only transform and opacity animate, nothing listens to scrolling, and a choice redraws only what it changes. Scrolling a real report ran every frame within 16.8 ms, with no long tasks. That was measured on the page's main thread, in a headless browser.
+Open Diskly, press **扫描** (Scan), and your browser opens a self-contained report. See what takes up space, which folders changed since the previous scan, and which files deserve a closer look.
 
 <p align="center">
-  <img src="docs/images/report-map.png" width="880" alt="The space map: each folder a tile sized by the space it takes, next to the same folders as a list">
+  <a href="docs/images/report-dark.png"><img src="docs/images/report-dark.png" width="100%" alt="Diskly's true-black report: disk rings, a brief summary, biggest files and folders, and storage map" /></a><br />
+  <sub>The real report interface, rendered with made-up data to protect private file paths. Click to enlarge.</sub>
 </p>
 
-**What it shows:**
-
-- **A map of the space.** Every folder is a tile sized by what it takes. Click to fly in, and switch to color by what changed.
-- **The biggest files.** Filter by type, click to copy a path, or jump to the folder.
-- **What the space is made of.** Video, images, archives, programs and more, down to each extension.
-- **The folders that take the most**, down to the ones that really explain it.
-- **Places worth a look.** Recycle Bin, downloads, caches, Docker and WSL, each with what it is and what the system offers for it. Diskly only tells you. It does not touch them.
-- **What changed since last time**, by folder and by file.
-- **The long view.** A trend for each disk over months or years, how fast it is filling, and when it would be full.
-
-<p align="center">
-  <img src="docs/images/report-files.png" width="880" alt="The biggest files with filters by type, next to what kinds of file take the space">
-</p>
-
-<p align="center">
-  <img src="docs/images/report-trend.png" width="880" alt="Used space over a year for each disk, with a forecast and the top-level folders that changed most">
-</p>
-
-### You can trust the numbers
-
-- **It only reads.** Diskly never deletes or changes your files, and a test keeps it that way.
-- **It stays on your computer.** No account, telemetry or network access.
-- **Unknown is not zero.** A folder that could not be read is marked unknown, with everything below it. It never counts as space freed.
-- **It follows the disk, not the letter.** A disk with a new letter still compares. A formatted one starts again rather than reporting everything as deleted.
-
-<table align="center">
+<table>
   <tr>
-    <td><img src="docs/images/launcher-home.png" width="270" alt="The Diskly window, listing the disks and a Scan button"></td>
-    <td><img src="docs/images/launcher-scanning.png" width="270" alt="The Diskly window during a scan, with progress and elapsed time for each disk"></td>
-    <td><img src="docs/images/launcher-settings.png" width="270" alt="The settings, showing how much disk space Diskly itself takes against its limit"></td>
+    <td width="50%" valign="top">
+      <a href="docs/images/report-map.png"><img src="docs/images/report-map.png" width="100%" alt="Interactive disk treemap showing folders as size-proportional tiles beside a folder list" /></a><br />
+      <strong>Explore the space map</strong><br />
+      <sub>Drill into folders, inspect their size, and color tiles by change.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/images/report-files.png"><img src="docs/images/report-files.png" width="100%" alt="Largest files alongside file-type distribution and filters in the Diskly report" /></a><br />
+      <strong>Find the biggest files</strong><br />
+      <sub>Filter by type, copy a path, or open the containing folder.</sub>
+    </td>
   </tr>
 </table>
 
-<p align="center"><sub>The window is real. The report pictures show made-up data, so no real paths are published.</sub></p>
+<details>
+<summary><strong>📈 See trends and the small launcher window</strong></summary>
 
-## Get it
+<p align="center">
+  <a href="docs/images/report-trend.png"><img src="docs/images/report-trend.png" width="100%" alt="Disk usage history over time, estimated time to full and folders that changed" /></a><br />
+  <sub>History, filling rate and a forecast based on recorded scans.</sub>
+</p>
 
-Download from [Releases](https://github.com/seiya058904/Diskly/releases). For 64-bit Windows 11, where it has been tested. It should also run on Windows 10, without the frosted window background.
+<table>
+  <tr>
+    <td width="33%" align="center"><a href="docs/images/launcher-home.png"><img src="docs/images/launcher-home.png" width="100%" alt="Diskly launcher with disks and Scan button" /></a><br /><sub>Ready to scan</sub></td>
+    <td width="33%" align="center"><a href="docs/images/launcher-scanning.png"><img src="docs/images/launcher-scanning.png" width="100%" alt="Diskly launcher displaying scan progress for each disk" /></a><br /><sub>Scanning</sub></td>
+    <td width="33%" align="center"><a href="docs/images/launcher-settings.png"><img src="docs/images/launcher-settings.png" width="100%" alt="Diskly launcher settings displaying app storage usage" /></a><br /><sub>Settings &amp; footprint</sub></td>
+  </tr>
+</table>
 
-- **`Diskly-x.y.z-setup.exe`** installs for your user only, with no administrator rights.
-- **`Diskly-x.y.z-portable.exe`** runs as it is. It needs Microsoft Edge WebView2, which Windows 11 includes.
+The launcher images show the real app. The report images use synthetic data; none reveal a user's actual scan results.
 
-The files are not code-signed, so Windows SmartScreen may warn you the first time. Each release lists SHA-256 checksums in `SHA256SUMS.txt`.
+</details>
 
-## How to use it
+<a id="features"></a>
 
-1. **Open Diskly** and press **扫描** (Scan). Windows asks once for administrator rights, for the fast scan. All fixed disks are scanned, and you can cancel at any time.
-2. **The report opens in your default browser.** The first scan records how things are now. From the second scan on, it also shows what changed.
-3. **Look around.** Filter by disk or file type, click a tile to go into a folder, click a file to copy its path, or pick two recent scans to compare.
-4. **Press 复制给 AI** (Copy for AI) to get a summary for ChatGPT, Claude or whatever you use. You see the exact text first. Diskly sends nothing itself.
+## ✨ Just the things you need
 
-Closing the browser loses nothing. Each report is one file that works offline, and the window's **历史** (History) list opens it again.
+<table>
+  <tr>
+    <td width="50%" valign="top"><strong>⚡ Scan without the wait</strong><br /><br />Read the NTFS file table directly for fast scans. Diskly falls back to ordinary folder traversal when elevation is declined or the drive is not NTFS.</td>
+    <td width="50%" valign="top"><strong>🧭 See what actually changed</strong><br /><br />Compare recent scans, track growth and shrinkage by folder and file, and follow each disk even when its drive letter changes.</td>
+  </tr>
+  <tr>
+    <td valign="top"><strong>🗂️ Understand the big picture</strong><br /><br />Interactive treemap, largest files and folders, categories by extension, and explanations for common space-consuming locations such as caches, Docker, WSL and the Recycle Bin.</td>
+    <td valign="top"><strong>📊 Keep the long view</strong><br /><br />See disk usage trends over time, estimated filling rates, and a forecast. Reports are standalone HTML files you can reopen offline.</td>
+  </tr>
+  <tr>
+    <td valign="top"><strong>🛡️ Inspect, never delete</strong><br /><br />Diskly reads file names and sizes, not file contents. It never deletes, cleans or modifies your files; uncertain or unreadable folders stay marked unknown.</td>
+    <td valign="top"><strong>🤖 Bring your own AI</strong><br /><br />Use <strong>复制给 AI</strong> (Copy for AI) to preview and copy a text summary. Diskly never sends it anywhere — sharing is your decision.</td>
+  </tr>
+</table>
 
-## Two ways to scan
+The interface takes cues from iOS: true black, restrained glass effects, spring-like interactions and smooth, focused movement.
 
-The fast scan is the default. You can change it in **设置** (Settings).
+<a id="performance"></a>
 
-| | Fast scan | Normal scan |
-|---|---|---|
-| How | Reads the NTFS file table directly | Lists folders one by one |
-| Permission | Windows asks for administrator rights on each scan | None |
-| What it sees | Everything, including system folders | Some system folders stay unreadable and are marked unknown |
-| Disks | NTFS; others use the normal way | Any |
+## ⚡ Fast on real disks. Small over time.
 
-Administrator rights go to a small helper process that exists for that one scan and only reads. The window itself never runs elevated. If you say no, Diskly does a normal scan and says so.
+| Measured on one Windows 11 PC | Observed |
+| :-- | --: |
+| **Fast scan** · 2 NVMe drives, ~730,000 files | **1.50 s** |
+| First fast scan after a while | **3.65 s** |
+| **Normal scan**, including saving · same drives | **5.76–6.55 s** |
+| Offline report ready · headless Chrome test | **321 ms** |
+| Program + retained data + WebView2 cache | **≈26 MB** on the test PC |
 
-## What it keeps
+Measurements used an **i7-12700H**, two NVMe SSDs and files largely cached by Windows; scan timings exclude the time spent responding to the administrator prompt. Results vary with drive size, file count, cache state and hardware. The page measurement is from a headless browser, not a guarantee of physical GPU smoothness.
 
-| | Kept | Size here |
-|---|---|---:|
-| Program | | 8.7 MB |
-| Scans | The last 3 per disk. Only the newest keeps its files, which the next scan is compared with. Older ones keep only their folders, about a fifth of the size | about 10 MB |
-| Reports | The last 3. An older one is made again when you open it | about 5 MB |
-| Records | One small line per scan, kept for years and thinned with age. They drive the trend charts | a few hundred KB at most |
-| Window cache | WebView2's component downloads and disk caches are turned off, and the folder is cleared if it passes 6 MB | about 2.4 MB |
+Diskly is designed to keep its **total disk footprint below 50 MB** during normal use, including the executable, saved scans, reports and window cache. Its storage is bounded rather than growing with every scan; the limit has exceptions for very large volumes and interrupted scans. [See the measured footprint and test boundaries](docs/benchmarks/2026-11-speed-and-footprint.md).
 
-If the limit is ever in reach, the oldest go first. There are two exceptions:
+<a id="get-started"></a>
 
-- **A disk with several million files** may not fit even one full snapshot. It keeps its records and report and says what it cannot compare, and during such a scan Diskly can briefly pass the limit. This has not been tried on a disk that large.
-- **A power cut during a fast scan**, in the second or two it runs, can leave one set of temporary files that only an administrator can remove.
+## 📦 Download. Scan. Explore.
 
-Everything lives in `%LOCALAPPDATA%\Diskly`. To remove Diskly entirely, uninstall it or delete the portable file, then delete that folder.
+**[Get the latest Diskly release →](https://github.com/seiya058904/Diskly/releases/latest)**
 
-## What the numbers mean
+| v0.2.0 · Windows x64 | Download |
+| :-- | :-- |
+| **Installer · ~2.3 MiB** | [Diskly-0.2.0-setup.exe](https://github.com/seiya058904/Diskly/releases/download/v0.2.0/Diskly-0.2.0-setup.exe) — installs for the current user, without installation-time elevation |
+| **Portable · ~8.7 MiB** | [Diskly-0.2.0-portable.exe](https://github.com/seiya058904/Diskly/releases/download/v0.2.0/Diskly-0.2.0-portable.exe) — run directly; needs Microsoft Edge WebView2 |
+| **Checksums** | [SHA256SUMS.txt](https://github.com/seiya058904/Diskly/releases/download/v0.2.0/SHA256SUMS.txt) — verify your download |
 
-Disk space is easy to measure and easy to get wrong when comparing. Diskly would rather say it does not know.
+1. **Open Diskly** and press **扫描**. The default fast scan asks Windows for administrator permission. If you decline, Diskly uses normal scanning and tells you.
+2. **Read your report** in the default browser. The first scan establishes a baseline; later scans show changes.
+3. **Explore** by disk, file type and folder. Choose two compatible scans to compare, or copy a reviewed summary for an AI assistant.
 
-- **A missing disk is missing.** It shows as not connected, with its last result.
-- **Fast and normal scans are not compared.** They measure some files differently, such as compressed system files, so comparing them would invent changes. Diskly compares like with like and says when it cannot.
-- **A cancelled scan changes nothing.** It is never used as a baseline.
-- **Two figures can differ.** The change in used space comes from Windows. The change in folders comes from the scan. Shadow copies, unreadable folders and file system metadata affect only the first.
-- **Folder totals count each hard link.** Windows uses many of them, so folder totals can exceed the used space the system reports.
+**Compatibility:** Tested on **Windows 11 x64**. Windows 10 is expected to work, but is not verified here; it will not have the same frosted launcher background. WebView2 is included with Windows 11.
 
-## Privacy
+<details>
+<summary><strong>🔐 Unsigned downloads, UAC and checksum verification</strong></summary>
 
-Diskly reads file names and sizes, never file contents.
+The binaries are **not code-signed**, so Windows SmartScreen may show a reputation warning. Download only from this repository's release page and check the published hash before running the file.
 
-- A report contains your folder and file names. Look through it before you share the file.
-- The text for an AI hides your account and organization names by default, and can also hide the names inside your personal folders. It can still contain other folder and file names, so read it before you send it.
+~~~powershell
+Get-FileHash .\Diskly-0.2.0-setup.exe -Algorithm SHA256
+~~~
 
-## Built on
+Installation itself is per-user. **Fast scanning** is a separate action: a short-lived, read-only helper requests administrator rights for direct NTFS access; the main window never runs elevated. You may cancel a scan at any time. Declining elevation falls back to normal scanning.
 
-The scanning engine is [Diskghost](https://github.com/kingchenc/diskghost) by kingchenc, under the MIT License. Diskly was started from it, keeps its history, and adds history, comparison and the two interfaces. A few changes were made to the engine, each with its evidence in [docs/benchmarks](docs/benchmarks). See [NOTICE](NOTICE) for what comes from where.
+</details>
 
-## Development
+<a id="how-it-works"></a>
 
-Needs Rust and Node 22 or newer, on Windows.
+## 🔎 Two ways to look at a disk
 
-```powershell
-cargo test --workspace                 # engine, history, comparison, and guards against deleting and growing
-node --test report/lib.test.js         # the report's logic
+| | **Fast scan** · default | **Normal scan** · fallback |
+| :-- | :-- | :-- |
+| Reads | NTFS file table (MFT) | Folder tree |
+| Permissions | Administrator prompt for each scan | Standard user |
+| Drives | NTFS; other filesystems use fallback | Filesystems accessible to Windows |
+| Coverage | Includes entries ordinary folder traversal may miss | Unreadable folders explicitly marked unknown |
+| Comparison | Compared only with prior fast scans | Compared only with prior normal scans |
 
-# The report in a real browser, from a file:// URL
+Diskly prioritizes **truthful changes over impressive-looking numbers**:
+
+- Unreadable folders are **unknown, never zero**; they are not counted as space freed.
+- A missing disk retains its previous result instead of appearing emptied. A reformatted disk starts a new history.
+- Cancelled or differently scanned snapshots are not used for misleading folder-to-folder comparisons.
+- Windows' used-space total and scanned folder totals can differ because of hard links, shadow copies and filesystem metadata.
+
+<a id="privacy"></a>
+
+## 🔒 Your files stay yours
+
+Diskly works locally, with **no account, telemetry, background service or app-initiated network requests**. It reads file names and sizes, not their contents. It does not offer a delete or cleanup action.
+
+The report is a standalone HTML file. **It can contain private folder and file names**, so review it before sharing. The Copy for AI text hides account and organization names by default and can hide names inside personal folders, but other paths can remain. You preview the text before copying; Diskly does not upload it.
+
+<details>
+<summary><strong>📁 Storage, retention and known limits</strong></summary>
+
+Diskly stores its own data in `%LOCALAPPDATA%\Diskly`. On the measured machine, the program was ~8.7 MB, retained data roughly 11–21 MB depending on scan modes, and the WebView2 folder ~2–4 MB.
+
+- **Recent scans:** last three per disk. Older snapshots retain folders rather than full file lists; only the newest scan for each engine keeps its file details.
+- **Reports:** last three ready-made reports. Older ones are regenerated from retained data when opened.
+- **Long-term history:** small, gradually thinned records for disk trends. The app limits and cleans only **its own** stored files.
+- **Exception — extremely large volumes:** millions of files may not fit in one full snapshot. A scan may temporarily exceed the 50 MB footprint target; this has not been tested on such a volume.
+- **Exception — interrupted fast scans:** a power failure during the elevated helper's short run may leave temporary files requiring administrator rights to remove.
+- **Memory ≠ disk usage:** the measured launcher private memory was about 165 MB, mostly WebView2; the 50 MB goal describes **disk storage**, not RAM.
+
+To remove all locally stored history after uninstalling or deleting the portable executable, remove `%LOCALAPPDATA%\Diskly` manually.
+
+[Detailed footprint results](docs/benchmarks/2026-11-speed-and-footprint.md) · [Scanner accuracy and acceptance](docs/benchmarks/2026-11-core-acceptance.md)
+
+</details>
+
+<a id="development"></a>
+
+## 🛠️ Build from source
+
+**Rust · Tauri 2 · JavaScript · Windows** — requires Rust and Node.js 22 or newer.
+
+~~~powershell
+# Core and report logic
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+node --test report/lib.test.js
+
+# Generate an offline demo and test its report in a real browser
 ./scripts/e2e/build-demo.ps1 -Out $env:TEMP\diskly-demo
 node scripts/e2e/report.e2e.mjs $env:TEMP\diskly-demo $env:TEMP\diskly-shots
-node scripts/e2e/smooth.mjs $env:TEMP\diskly-demo\normal.html $env:TEMP\diskly-shots   # load time, frame times
 
-# The real app on real disks, with its history in a test folder
+# Build the real Windows app and its download packages
 cargo build -p diskly --release
-node scripts/e2e/app.e2e.mjs (Resolve-Path target\release\diskly.exe) $env:TEMP\diskly-e2e basic
+./scripts/package.ps1
+~~~
 
-./scripts/package.ps1                  # installer, portable file and checksums, in dist\
-```
+Packaging writes the installer, portable executable and SHA-256 sums to `dist\`. Real-disk app tests use `scripts/e2e/app.e2e.mjs` and should be run with an isolated test data directory.
 
-| Folder | What is in it |
-|---|---|
-| `crates/diskghost-core` | The engine, from Diskghost |
-| `crates/diskly-core` | Volumes, scanning, history, report data |
-| `report` | The report page, with its logic in `lib.js` |
-| `app` | The window, and the helper for fast scans |
-| `scripts` | Browser tests, made-up data, packaging, measurements |
+<details>
+<summary><strong>Explore the architecture and verification</strong></summary>
 
-## License
+| Path | Responsibility |
+| :-- | :-- |
+| `crates/diskghost-core` | Upstream NTFS / folder-walk scanning engine |
+| `crates/diskly-core` | Volumes, history, comparisons and report data |
+| `app` | Desktop launcher and elevated scan helper |
+| `report` | Offline HTML report and its logic |
+| `scripts` | Tests, synthetic demos, measurements and packaging |
 
-[MIT](LICENSE)
+Run browser smoothness checks with `scripts/e2e/smooth.mjs`. The [benchmark reports](docs/benchmarks) explain the conditions, accuracy tests and remaining coverage gaps.
+
+</details>
+
+<details>
+<summary><strong>🇨🇳 简体中文 · 快速了解</strong></summary>
+
+**Diskly 是一款轻量、只读的 Windows 磁盘空间分析工具。** 点击「扫描」，即可在浏览器中查看离线可交互报告：磁盘容量、占用最大的文件和目录、文件类型分布、空间地图，以及与上次扫描相比的变化和长期趋势。
+
+默认使用 NTFS 高速扫描，需要单次管理员授权；拒绝授权后会自动回退到普通扫描。**不会删除或修改文件，不主动联网，也不会自动向 AI 上传数据。** v0.2.0 提供 [安装版和便携版](https://github.com/seiya058904/Diskly/releases/tag/v0.2.0)，界面为简体中文。测速结果来自特定测试机器，不能视为所有电脑的固定速度。
+
+</details>
+
+## 🌱 Built on Diskghost
+
+Diskly is an independent, read-only application built on **[Diskghost](https://github.com/kingchenc/diskghost)** by kingchenc. It preserves the upstream Git history and scanning engine, with documented corrections, while adding a new launcher, local history, comparison and a visual offline report. Diskghost's duplicate finder and file-deletion features are **not part of Diskly**.
+
+Licensed under **[MIT](LICENSE)**. Original work and modifications are credited in [NOTICE](NOTICE).
+
+---
+
+<p align="center">
+  <strong>Less guessing. More space to breathe.</strong><br />
+  <a href="https://github.com/seiya058904/Diskly/releases/latest">Download Diskly</a>
+  &nbsp;·&nbsp; <a href="https://github.com/seiya058904/Diskly/issues">Feedback</a>
+  &nbsp;·&nbsp; <a href="#top">Back to top ↑</a>
+</p>
