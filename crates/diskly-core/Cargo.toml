@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT"
 authors = ["seiya058904"]
 repository = "https://github.com/seiya058904/Diskly"
-rust-version = "1.80"
+rust-version = "1.82"
 description = "Diskly's thin layer over the Diskghost core: volumes, history, comparison and the report."
 
 [dependencies]

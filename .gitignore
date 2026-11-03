@@ -11,3 +11,11 @@ app/src-tauri/gen/
 .DS_Store
 Thumbs.db
 *.log
+
+# Only the icons the Windows build uses
+app/src-tauri/icons/*
+!app/src-tauri/icons/32x32.png
+!app/src-tauri/icons/128x128.png
+!app/src-tauri/icons/128x128@2x.png
+!app/src-tauri/icons/icon.ico
+!app/src-tauri/icons/icon.png

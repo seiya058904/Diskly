@@ -32,9 +32,12 @@ fn own_sources() -> Vec<PathBuf> {
     files
 }
 
-/// `text` with `// comments` left out, so explaining a rule cannot break it.
+/// What ships: `text` without its comments, so explaining a rule cannot break
+/// it, and without its test module, which cleans up after itself.
 fn code_of(text: &str) -> String {
-    text.lines()
+    let shipped = text.split("#[cfg(test)]").next().unwrap_or("");
+    shipped
+        .lines()
         .map(|line| line.split("//").next().unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n")
@@ -67,7 +70,7 @@ fn only_the_store_removes_files_and_it_checks_each_one() {
                 "one guarded call"
             );
             assert!(code.contains("fn remove_own_file"));
-        } else if !file.ends_with("helper.rs") {
+        } else {
             assert!(
                 !code.contains("remove_file"),
                 "remove_file in {}",

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/diskghost-core", "crates/diskly-core"]
+members = ["crates/diskghost-core", "crates/diskly-core", "app/src-tauri"]
 resolver = "2"
 
 [workspace.package]

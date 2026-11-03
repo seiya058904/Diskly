@@ -270,8 +270,35 @@ impl Store {
         Snapshot::load(&path).map_err(|e| format!("无法解析快照：{e}"))
     }
 
+    /// Where an elevated helper leaves its results.
+    pub fn helper_dir(&self) -> PathBuf {
+        self.root.join("helper")
+    }
+
+    /// Remove the files a helper session may have left, by their exact names.
+    pub fn clear_helper_files(&self, token: &str) {
+        if !valid_id(token) {
+            return;
+        }
+        let dir = self.helper_dir();
+        let mut names: Vec<String> = ["alive", "cancel", "beat", "progress", "done"]
+            .iter()
+            .map(|what| format!("{token}-{what}.json"))
+            .collect();
+        for letter in 'A'..='Z' {
+            names.push(format!("{token}-{letter}.json"));
+            names.push(format!("{token}-{letter}.dgs"));
+        }
+        for name in names {
+            let path = dir.join(name);
+            if path.exists() {
+                let _ = self.remove_own_file(&path);
+            }
+        }
+    }
+
     /// Remove a file of this store. Refuses anything but a plain file of an
-    /// expected kind, directly inside a folder of this store.
+    /// expected kind, directly in a volume's history folder or the helper folder.
     fn remove_own_file(&self, path: &Path) -> io::Result<()> {
         let refuse = |why: &str| Err(io::Error::new(io::ErrorKind::InvalidInput, why.to_string()));
         let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -283,8 +310,10 @@ impl Store {
         };
         let history = fs::canonicalize(self.root.join("history"))?;
         let parent = fs::canonicalize(parent)?;
-        if parent.parent() != Some(history.as_path()) {
-            return refuse("outside the history folder");
+        let in_history = parent.parent() == Some(history.as_path());
+        let in_helper = fs::canonicalize(self.helper_dir()).is_ok_and(|helper| helper == parent);
+        if !in_history && !in_helper {
+            return refuse("outside the folders of this store");
         }
         let info = fs::symlink_metadata(path)?;
         if !info.is_file() {
