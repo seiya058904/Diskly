@@ -513,6 +513,33 @@ impl Snapshot {
         Ok(ScanTree::from_entries(&self.root, entries))
     }
 
+    /// The same scan without its files: all that comparing folders needs, at a
+    /// fraction of the size.
+    pub fn folders_only(&self) -> Result<Snapshot, SnapshotError> {
+        let mut enc = Encoder::new();
+        let mut c = Cursor::new(self)?;
+        c.advance()?;
+        while !c.done {
+            if c.dir {
+                enc.entry(&c.key, c.kind, c.size, c.files);
+            }
+            c.advance()?;
+        }
+        let (data, entries) = enc.finish();
+        Ok(Snapshot {
+            format: self.format,
+            taken_at: self.taken_at,
+            root: self.root.clone(),
+            total_size: self.total_size,
+            total_files: self.total_files,
+            total_dirs: self.total_dirs,
+            has_files: false,
+            complete: self.complete,
+            entries,
+            data,
+        })
+    }
+
     /// Every directory below the root with its totals, in path order.
     pub fn dirs(&self) -> Result<Vec<DirSize>, SnapshotError> {
         let mut out = Vec::new();
