@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="500" viewBox="0 0 1280 500" role="img" aria-labelledby="title desc">
+<title id="title">Diskly — Know your space.</title>
+<desc id="desc">An illustrated dark storage dashboard with disk usage rings, a treemap and local-first messaging. This cover is conceptual artwork, not a product screenshot.</desc>
+<defs>
+<linearGradient id="bg" x2="1" y2="1"><stop stop-color="#101728"/><stop offset=".52" stop-color="#080D18"/><stop offset="1" stop-color="#080A12"/></linearGradient>
+<radialGradient id="a"><stop stop-color="#167FF6" stop-opacity=".27"/><stop offset="1" stop-color="#167FF6" stop-opacity="0"/></radialGradient>
+<radialGradient id="b"><stop stop-color="#8A5CE9" stop-opacity=".24"/><stop offset="1" stop-color="#8A5CE9" stop-opacity="0"/></radialGradient>
+<linearGradient id="ring" x2="1" y2="1"><stop stop-color="#65C8F5"/><stop offset="1" stop-color="#2575F5"/></linearGradient>
+<linearGradient id="card" x2="1" y2="1"><stop stop-color="#202B40" stop-opacity=".88"/><stop offset="1" stop-color="#141A29" stop-opacity=".96"/></linearGradient>
+<linearGradient id="hair"><stop stop-color="#94C9FF" stop-opacity=".35"/><stop offset="1" stop-color="#94C9FF" stop-opacity=".06"/></linearGradient>
+<linearGradient id="dblue" x2="1" y2="1"><stop stop-color="#6FC6FF"/><stop offset="1" stop-color="#4082F6"/></linearGradient>
+<linearGradient id="tree" x2="1" y2="1"><stop stop-color="#1C66C7"/><stop offset="1" stop-color="#184D9D"/></linearGradient>
+<filter id="shadow" x="-30%" y="-40%" width="160%" height="200%"><feDropShadow dx="0" dy="24" stdDeviation="30" flood-color="#010409" flood-opacity=".56"/></filter>
+<clipPath id="frame"><rect width="1280" height="500" rx="25"/></clipPath>
+<clipPath id="map"><rect x="741" y="333" width="423" height="103" rx="11"/></clipPath>
+</defs>
+<g clip-path="url(#frame)">
+<rect width="1280" height="500" fill="url(#bg)"/>
+<circle cx="1011" cy="194" r="420" fill="url(#a)"/><circle cx="646" cy="492" r="380" fill="url(#b)"/>
+<path d="M0 388 C240 347 442 438 700 353 S1150 278 1280 318" stroke="#7B94CB" stroke-opacity=".075" fill="none"/>
+<path d="M0 405 C280 364 458 454 720 370 S1160 299 1280 335" stroke="#7B94CB" stroke-opacity=".06" fill="none"/>
+<g fill="#A4B6D4" opacity=".35"><circle cx="49" cy="70" r="1.5"/><circle cx="552" cy="430" r="2"/><circle cx="1222" cy="64" r="1.5"/><circle cx="1188" cy="474" r="2"/></g>
+<g transform="translate(68 68)"><rect y="-4" width="43" height="43" rx="13" fill="#182E4D" stroke="#72B4FF" stroke-opacity=".26"/><circle cx="21.5" cy="17.5" r="12" fill="none" stroke="#79BEFF" stroke-opacity=".28" stroke-width="4"/><path d="M21.5 5.5 A12 12 0 1 1 9.8 19.9" fill="none" stroke="#65B1FF" stroke-width="4" stroke-linecap="round"/><circle cx="21.5" cy="17.5" r="4" fill="#9ACFFF"/></g>
+<text x="126" y="89" font-family="Segoe UI,Inter,Arial,sans-serif" font-size="16" font-weight="700" fill="#EAF3FF" letter-spacing="2.1">DISKLY</text>
+<rect x="229" y="72" width="1" height="17" fill="#5A789D" opacity=".55"/><text x="245" y="87" font-family="Segoe UI,Inter,Arial,sans-serif" font-size="12" fill="#8EACC9" letter-spacing="1.4">STORAGE, MADE CLEAR</text>
+<text x="68" y="205" font-family="Segoe UI,Inter,Arial,sans-serif" font-size="59" font-weight="750" letter-spacing="-2.9" fill="#F6F9FF">Know your</text>
+<text x="68" y="273" font-family="Segoe UI,Inter,Arial,sans-serif" font-size="64" font-weight="750" letter-spacing="-3.1" fill="#F6F9FF">space<tspan fill="#69B5FF">.</tspan></text>
+<g font-family="Segoe UI,Inter,Arial,sans-serif" font-size="17.5" fill="#B7C8DE"><text x="71" y="319">Find the biggest files. See what changed.</text><text x="71" y="346">All in one beautiful, offline report.</text></g>
+<g font-family="Segoe UI,Inter,Arial,sans-serif" font-size="12" font-weight="650" letter-spacing=".5">
+<rect x="69" y="387" width="133" height="34" rx="17" fill="#1A2E48" stroke="#5F9FD9" stroke-opacity=".3"/><circle cx="86" cy="404" r="4" fill="#66B8FF"/><text x="99" y="408" fill="#C7E3FF">FAST SCANS</text>
+<rect x="215" y="387" width="122" height="34" rx="17" fill="#1B2B36" stroke="#7ECABB" stroke-opacity=".29"/><circle cx="232" cy="404" r="4" fill="#6FD8B3"/><text x="245" y="408" fill="#C8F1E0">READ ONLY</text>
+<rect x="350" y="387" width="130" height="34" rx="17" fill="#26263E" stroke="#A59BFE" stroke-opacity=".28"/><circle cx="367" cy="404" r="4" fill="#B8ABFF"/><text x="380" y="408" fill="#E1DAFF">LOCAL FIRST</text>
+</g>
+<text x="72" y="457" font-family="Segoe UI,Inter,Arial,sans-serif" font-size="12" fill="#7891AF" letter-spacing=".8">WINDOWS  ·  OPEN SOURCE  ·  NO TELEMETRY</text>
+<g filter="url(#shadow)">
+<rect x="695" y="70" width="516" height="399" rx="20" fill="url(#card)" stroke="#97B9E9" stroke-opacity=".25" stroke-width="1.5"/>
+<rect x="696" y="71" width="514" height="50" rx="19" fill="#212B3F" opacity=".75"/><path d="M696 121 H1210" stroke="url(#hair)"/>
+<circle cx="727" cy="96" r="5" fill="#EF7370"/><circle cx="745" cy="96" r="5" fill="#EFB95E"/><circle cx="763" cy="96" r="5" fill="#60CAA1"/>
+<text x="791" y="101" font-family="Segoe UI,Inter,Arial,sans-serif" fill="#E5F1FF" font-size="13.5" font-weight="650">Storage overview</text>
+<rect x="1092" y="84" width="86" height="24" rx="12" fill="#2A3E57"/><circle cx="1105" cy="96" r="3.5" fill="#6BDBB9"/><text x="1117" y="100" font-family="Segoe UI,Inter,Arial,sans-serif" fill="#B5CDE6" font-size="11.5">Illustration</text>
+<text x="744" y="155" font-family="Segoe UI,Inter,Arial,sans-serif" fill="#A8BBD2" font-size="11.5" letter-spacing=".6">DISK USAGE</text>
+<g transform="translate(839 239) rotate(-90)">
+<circle r="70" fill="none" stroke="#3E495E" stroke-width="18"/>
+<circle r="70" fill="none" stroke="url(#ring)" stroke-width="18" stroke-dasharray="257 440" stroke-linecap="round"/>
+<circle r="70" fill="none" stroke="#51C9AA" stroke-width="18" stroke-dasharray="67 440" stroke-dashoffset="-267" stroke-linecap="round"/>
+<circle r="70" fill="none" stroke="#F2A55C" stroke-width="18" stroke-dasharray="42 440" stroke-dashoffset="-343" stroke-linecap="round"/>
+</g>
+<text x="839" y="235" font-family="Segoe UI,Inter,Arial,sans-serif" fill="#F7FAFF" font-size="26" font-weight="700" text-anchor="middle">C:</text>
+<text x="839" y="257" font-family="Segoe UI,Inter,Arial,sans-serif" fill="#849AB3" font-size="11" text-anchor="middle">SYSTEM DISK</text>
+<g font-family="Segoe UI,Inter,Arial,sans-serif">
+<text x="954" y="183" font-size="12.5" font-weight="600" fill="#DAE8F8">System</text><text x="1156" y="183" font-size="11.5" fill="#94A6BC" text-anchor="end">C:</text>
+<rect x="953" y="193" width="205" height="8" rx="4" fill="#394456"/><rect x="953" y="193" width="146" height="8" rx="4" fill="url(#dblue)"/>
+<text x="954" y="231" font-size="12.5" font-weight="600" fill="#DAE8F8">Projects</text><text x="1156" y="231" font-size="11.5" fill="#94A6BC" text-anchor="end">D:</text>
+<rect x="953" y="241" width="205" height="8" rx="4" fill="#394456"/><rect x="953" y="241" width="98" height="8" rx="4" fill="#48CBA8"/>
+<text x="954" y="279" font-size="12.5" font-weight="600" fill="#DAE8F8">Other files</text>
+<rect x="953" y="289" width="205" height="8" rx="4" fill="#394456"/><rect x="953" y="289" width="61" height="8" rx="4" fill="#E3A35E"/>
+</g>
+<text x="744" y="324" font-family="Segoe UI,Inter,Arial,sans-serif" fill="#A8BBD2" font-size="11.5" letter-spacing=".6">WHERE YOUR SPACE GOES</text>
+<g clip-path="url(#map)" stroke="#172135" stroke-width="4">
+<rect x="739" y="331" width="191" height="107" fill="url(#tree)"/>
+<rect x="929" y="331" width="105" height="64" fill="#6F56BA"/><rect x="929" y="393" width="105" height="46" fill="#327D70"/>
+<rect x="1033" y="331" width="132" height="52" fill="#A26A3B"/><rect x="1033" y="382" width="80" height="57" fill="#41618D"/><rect x="1112" y="382" width="53" height="57" fill="#6F7BB0"/>
+</g>
+<g font-family="Segoe UI,Inter,Arial,sans-serif" fill="#E8EFF9" opacity=".86" font-size="11"><text x="761" y="373">Documents</text><text x="948" y="360">Apps</text><text x="1048" y="358">Media</text></g>
+</g></g></svg>
