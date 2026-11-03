@@ -11,9 +11,13 @@ kept and a remote named "upstream" for later updates.
 
 What comes from Diskghost:
 
-- crates/diskghost-core: the scanning, MFT and snapshot engine. Changed in one
-  place, crates/diskghost-core/src/mft.rs, to fix folders counted twice. See
-  docs/benchmarks/2026-11-core-acceptance.md for the evidence.
+- crates/diskghost-core: the scanning, MFT and snapshot engine. Changed in these
+  places, with the evidence in docs/benchmarks:
+  - src/mft.rs, to fix folders counted twice (2026-11-core-acceptance.md).
+  - src/walk.rs, to list directories through the kernel's own call, and to record
+    which ones could not be listed (src/tree.rs, ScanTree::unlistable_dirs)
+    (2026-11-speed-and-footprint.md).
+  - src/snapshot.rs, Snapshot::folders_only, to keep older scans small (same report).
 - app/src-tauri/src/helper.rs: adapted from Diskghost's gui/src-tauri/src/helper.rs.
   It takes its instructions differently, for safety; see the top of that file.
 
