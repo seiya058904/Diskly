@@ -1,4 +1,4 @@
-/* The launcher window. */
+/* The launcher window: iOS on true black, with Windows' own frosted glass behind it. */
 
 html,
 body {
@@ -14,20 +14,21 @@ body {
   user-select: none;
 }
 
-/* On Windows 11 the system draws frosted Mica behind a transparent page. */
+/* On Windows 11 the system draws frosted Mica behind a transparent page. Black over it
+   keeps the window nearly black, with the desktop's color still glowing through. */
 html[data-backdrop="mica"] body {
-  background: transparent;
+  background: light-dark(rgba(242, 242, 247, 0.55), rgba(0, 0, 0, 0.62));
 }
 
-/* Without Mica, two faint fields give the glass something to soften. */
+/* Without Mica, a faint glow plays the same part. */
 html:not([data-backdrop="mica"]) body::before {
   content: "";
   position: fixed;
   inset: 0;
   z-index: -1;
   background:
-    radial-gradient(70% 55% at 10% 0%, var(--field-a), transparent 70%),
-    radial-gradient(70% 60% at 100% 100%, var(--field-b), transparent 70%);
+    radial-gradient(70% 45% at 12% 0%, var(--glow-a), transparent 72%),
+    radial-gradient(70% 45% at 95% 0%, var(--glow-b), transparent 72%);
 }
 
 .titlebar {
@@ -66,6 +67,7 @@ html:not([data-backdrop="mica"]) body::before {
   color: var(--ink-2);
   display: grid;
   place-items: center;
+  transition: background-color 0.18s linear;
 }
 
 .window-buttons svg {
@@ -75,6 +77,7 @@ html:not([data-backdrop="mica"]) body::before {
 
 .window-buttons button:hover {
   background: var(--hover);
+  transition-duration: 0.06s;
 }
 
 .window-buttons .close:hover {
@@ -91,10 +94,16 @@ main {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 6px 20px 16px;
+  padding: 6px 18px 18px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: var(--track) transparent;
+}
+
+/* Its children scroll. They must not be squeezed to fit instead. */
+main > * {
+  flex-shrink: 0;
 }
 
 /* It takes focus when the view changes, so the keyboard starts in the right
@@ -106,18 +115,18 @@ main:focus-visible {
 /* Home */
 
 .lead {
-  margin: 4px 0 18px;
+  margin: 4px 2px 16px;
   font-family: var(--font-display);
-  font-size: 21px;
-  line-height: 1.32;
-  font-weight: 600;
-  letter-spacing: -0.012em;
+  font-size: 24px;
+  line-height: 1.22;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   text-wrap: pretty;
 }
 
 .lead small {
   display: block;
-  margin-top: 5px;
+  margin-top: 6px;
   font-family: var(--font-text);
   font-size: 13px;
   line-height: 1.45;
@@ -127,11 +136,10 @@ main:focus-visible {
 }
 
 .group {
-  background: var(--glass);
   border-radius: var(--radius-group);
-  box-shadow: var(--shadow-group), inset 0 0 0 0.5px var(--glass-edge);
-  -webkit-backdrop-filter: saturate(170%) blur(24px);
-  backdrop-filter: saturate(170%) blur(24px);
+  background: var(--panel);
+  box-shadow: var(--edge);
+  overflow: hidden;
 }
 
 .disk {
@@ -140,7 +148,7 @@ main:focus-visible {
 
 .disk + .disk,
 .row + .row {
-  box-shadow: inset 0 0.5px 0 var(--hairline);
+  box-shadow: inset 15px 0.5px 0 -15px var(--hairline), inset 0 0.5px 0 var(--hairline);
 }
 
 .disk-head {
@@ -150,8 +158,8 @@ main:focus-visible {
 }
 
 .disk-letter {
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 650;
 }
 
 .disk-label {
@@ -184,7 +192,7 @@ main:focus-visible {
   inset: 0 auto 0 0;
   border-radius: 3px;
   background: var(--used);
-  transition: width 0.25s var(--ease);
+  transition: width 0.4s var(--ease);
 }
 
 .rail.scanning > span {
@@ -198,20 +206,19 @@ main:focus-visible {
 /* No count yet, as while the file table is read: motion says it is working,
    and no number pretends to know how far along it is. */
 .rail.indeterminate > span {
-  width: 34% !important;
-  background: var(--accent);
-  animation: slide 1.25s var(--ease) infinite;
+  width: 100% !important;
+  background: linear-gradient(90deg, transparent, var(--accent) 45%, var(--accent) 55%, transparent);
+  animation: slide 1.15s var(--ease) infinite;
+  will-change: transform;
 }
 
 @keyframes slide {
-  from { left: -34%; }
-  to { left: 100%; }
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .rail.indeterminate > span {
-    width: 100% !important;
-    left: 0;
     opacity: 0.45;
   }
 }
@@ -223,6 +230,7 @@ main:focus-visible {
   gap: 10px;
   font-size: 12px;
   color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
 }
 
 .disk-note.problem {
@@ -239,17 +247,19 @@ main:focus-visible {
   padding-top: 18px;
 }
 
+/* A press answers at once, and lets go on a spring. */
 .primary {
   display: block;
   width: 100%;
-  height: 44px;
+  height: 50px;
   border: 0;
-  border-radius: 22px;
+  border-radius: 25px;
   background: var(--accent);
   color: var(--on-accent);
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
-  transition: background-color 0.12s, transform 0.12s var(--ease);
+  letter-spacing: 0.01em;
+  transition: background-color 0.2s linear, transform 0.46s var(--spring-soft);
 }
 
 .primary:hover {
@@ -257,13 +267,15 @@ main:focus-visible {
 }
 
 .primary:active {
-  transform: scale(0.985);
+  transform: scale(0.955);
+  transition: transform 0.07s linear;
 }
 
 .primary[disabled] {
   background: var(--press);
   color: var(--ink-3);
   cursor: default;
+  transform: none;
 }
 
 .primary.quiet {
@@ -279,16 +291,24 @@ main:focus-visible {
   display: flex;
   justify-content: center;
   gap: 6px;
-  margin-top: 10px;
+  min-height: 30px;
+  margin-top: 8px;
+}
+
+.nav-note {
+  align-self: center;
+  font-size: 12px;
+  color: var(--ink-3);
 }
 
 .text-button {
   border: 0;
-  padding: 5px 13px;
-  border-radius: var(--radius-control);
+  padding: 5px 14px;
+  border-radius: 15px;
   background: transparent;
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: 13.5px;
+  transition: background-color 0.2s linear, transform 0.42s var(--spring-soft);
 }
 
 .text-button:hover {
@@ -296,8 +316,14 @@ main:focus-visible {
   color: var(--ink);
 }
 
+.text-button:active {
+  transform: scale(0.94);
+  transition: transform 0.07s linear;
+}
+
 .text-button.accent {
   color: var(--accent);
+  font-weight: 600;
 }
 
 /* Secondary views */
@@ -308,34 +334,39 @@ main:focus-visible {
   z-index: 1;
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin: -6px -8px 8px -8px;
-  padding: 6px 0;
-  -webkit-backdrop-filter: blur(20px);
-  backdrop-filter: blur(20px);
+  gap: 2px;
+  margin: -6px -18px 10px;
+  padding: 6px 12px;
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
 }
 
 .view-head h1 {
   font-family: var(--font-display);
-  font-size: 19px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.016em;
 }
 
 .back {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 8px;
+  border-radius: 50%;
   background: transparent;
-  color: var(--ink-2);
+  color: var(--accent);
+  transition: background-color 0.2s linear, transform 0.42s var(--spring-soft);
 }
 
 .back:hover {
   background: var(--hover);
-  color: var(--ink);
+}
+
+.back:active {
+  transform: scale(0.88);
+  transition: transform 0.07s linear;
 }
 
 .back svg {
@@ -355,24 +386,25 @@ main:focus-visible {
   min-height: 44px;
 }
 
-button.row:hover {
+button.row,
+.choice {
+  transition: background-color 0.34s linear;
+}
+
+button.row:hover,
+.choice:hover {
   background: var(--hover);
+  transition-duration: 0.1s;
 }
 
-button.row:first-child {
-  border-radius: var(--radius-group) var(--radius-group) 0 0;
-}
-
-button.row:last-child {
-  border-radius: 0 0 var(--radius-group) var(--radius-group);
-}
-
-button.row:only-child {
-  border-radius: var(--radius-group);
+button.row:active,
+.choice:active {
+  background: var(--press);
+  transition-duration: 0.02s;
 }
 
 button.row:focus-visible {
-  outline-offset: -2px;
+  outline-offset: -3px;
 }
 
 .row-main {
@@ -397,14 +429,15 @@ button.row:focus-visible {
 
 .row-chevron {
   flex: none;
-  width: 8px;
-  height: 13px;
+  width: 7px;
+  height: 12px;
   color: var(--ink-3);
 }
 
 .section-title {
   margin: 18px 0 7px 15px;
   font-size: 12.5px;
+  font-weight: 400;
   color: var(--ink-2);
 }
 
@@ -419,94 +452,104 @@ button.row:focus-visible {
   color: var(--ink-2);
 }
 
+/* A choice shows a check at the end of its row, not a radio button. */
 .choice {
+  position: relative;
   cursor: pointer;
 }
 
 .choice input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+}
+
+.choice::after {
+  content: "";
   flex: none;
   width: 16px;
   height: 16px;
-  margin: 0;
-  accent-color: var(--accent);
+  margin-right: 1px;
+  background: var(--accent);
+  clip-path: polygon(14% 52%, 2% 64%, 38% 96%, 98% 18%, 84% 6%, 37% 70%);
+  opacity: 0;
+  transform: scale(0.5);
+  transition: opacity 0.14s linear, transform 0.38s var(--spring);
 }
 
-.choice:hover {
-  background: var(--hover);
+.choice:has(input:checked)::after {
+  opacity: 1;
+  transform: none;
 }
 
-.choice:first-child {
-  border-radius: var(--radius-group) var(--radius-group) 0 0;
+.choice:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
 }
 
-.choice:last-child {
-  border-radius: 0 0 var(--radius-group) var(--radius-group);
+/* What Diskly itself takes */
+
+.usage {
+  display: block;
 }
 
-.row select {
-  flex: none;
-  padding: 3px 6px;
-  border: 0;
-  border-radius: var(--radius-small);
-  background: var(--press);
+.usage-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.usage-head b {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.016em;
+  color: var(--ink);
+}
+
+.meter {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+  margin-top: 8px;
+  border-radius: 5px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.meter span {
+  min-width: 2px;
+  border-radius: 2px;
+}
+
+.usage-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 11px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.usage-keys i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 2px;
 }
 
 .path {
   user-select: text;
 }
 
-/* First scan: how to scan */
-
-#sheet-layer:empty {
-  display: none;
-}
-
-#sheet-layer {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: flex-end;
-  background: light-dark(rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.4));
-  animation: fade 0.16s linear;
-}
-
-.sheet {
-  width: 100%;
-  max-height: 100%;
-  overflow-y: auto;
-  padding: 20px 18px 16px;
-  border-radius: 20px 20px 0 0;
-  /* Nearly solid: a window this small has text right behind the sheet. */
-  background: light-dark(rgba(250, 250, 252, 0.97), rgba(38, 38, 40, 0.97));
-  box-shadow: var(--shadow-sheet), inset 0 0.5px 0 var(--glass-edge);
-  animation: rise 0.24s var(--ease);
-}
-
-.sheet h2 {
-  font-family: var(--font-display);
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  margin-bottom: 12px;
-}
-
-.sheet .group {
-  background: light-dark(rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.06));
-  box-shadow: none;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-}
-
-.sheet .actions {
-  padding-top: 14px;
-}
-
 @keyframes fade {
   from { opacity: 0; }
-}
-
-@keyframes rise {
-  from { transform: translateY(26px); opacity: 0.4; }
 }
 
 .fade-in {

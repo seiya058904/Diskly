@@ -6,12 +6,13 @@ const tauri = window.__TAURI__;
 const invoke = tauri.core.invoke;
 
 const view = document.getElementById("view");
-const sheetLayer = document.getElementById("sheet-layer");
 
 const state = {
   volumes: [],
-  settings: { scan_mode: "ask", theme: "system", keep_per_volume: 20 },
+  settings: { scan_mode: "fast", theme: "dark" },
   dataFolder: "",
+  program: "",
+  footprint: null,
   version: "",
   lastRun: null,
   screen: "home",
@@ -170,7 +171,8 @@ function leadText() {
     return { title: "扫描完成", small: `${fallback}用时 ${seconds(outcome.seconds)}，报告已在浏览器中打开。` };
   }
   if (state.lastRun) return { title: "看看和上次比有什么变化", small: `上次扫描是${ago(state.lastRun.started_at)}。` };
-  return { title: "看看磁盘空间都去了哪里", small: "第一次扫描会记下现状，下次就能看到哪些目录变大或变小。" };
+  const how = state.settings.scan_mode === "fast" ? "极速扫描读取文件表，只需几秒。Windows 会请你确认一次管理员权限。" : "第一次扫描会记下现状，下次就能看到变化。";
+  return { title: "看看磁盘空间都去了哪里", small: how };
 }
 
 function renderHome() {
@@ -202,7 +204,9 @@ function renderHome() {
   }
 
   const nav = el("div", { class: "nav-row" });
-  if (!state.scan) {
+  if (state.scan) {
+    nav.append(el("span", { class: "nav-note", text: "只读取，不改动任何文件" }));
+  } else {
     if (state.outcome && state.outcome.scanId && state.outcome.stored && !state.outcome.error) {
       nav.append(el("button", { type: "button", class: "text-button accent", text: "打开报告", onclick: () => openReport(state.outcome.scanId) }));
     }
@@ -217,39 +221,10 @@ function renderHome() {
     el("div", { class: "actions" }, action, nav));
 }
 
-/* ---- First scan: how to scan ---- */
-
-function askHowToScan() {
-  const pick = (mode) => {
-    sheetLayer.replaceChildren();
-    state.settings.scan_mode = mode;
-    invoke("save_settings", { settings: state.settings }).catch(() => {});
-    startScan(mode);
-  };
-  const option = (title, detail, button, mode) => el("button", {
-    type: "button", class: "row", "data-mode": mode, onclick: () => pick(mode),
-  },
-    el("span", { class: "row-main" },
-      el("span", { class: "row-title", text: title }),
-      el("span", { class: "row-detail", text: detail })),
-    svg("0 0 8 13", "M1.5 1.5L6.5 6.5L1.5 11.5", "row-chevron"));
-  const sheet = el("div", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-labelledby": "sheet-title" },
-    el("h2", { id: "sheet-title", text: "用哪种方式扫描？" }),
-    el("div", { class: "group" },
-      option("极速扫描", "直接读取 NTFS 文件表，能看到所有目录，通常快很多。每次扫描要在 Windows 弹窗里确认一次管理员权限。只读取，不改动任何文件。", "", "fast"),
-      option("普通扫描", "不需要任何权限。部分系统目录读不到，这些目录会标为“未知”。", "", "normal")),
-    el("p", { class: "section-note", text: "两种方式的结果不能互相比较目录变化。之后可以在设置里更改。" }),
-    el("div", { class: "actions" },
-      el("button", { type: "button", class: "primary quiet", text: "取消", onclick: () => sheetLayer.replaceChildren() })));
-  sheetLayer.replaceChildren(sheet);
-  sheet.querySelector("button.row").focus();
-}
-
 /* ---- Scanning ---- */
 
 function requestScan() {
-  if (state.settings.scan_mode === "ask") askHowToScan();
-  else startScan(state.settings.scan_mode);
+  startScan(state.settings.scan_mode);
 }
 
 async function startScan(mode) {
@@ -312,6 +287,7 @@ async function refreshVolumes() {
     const home = await invoke("home");
     state.volumes = home.volumes;
     state.lastRun = home.last_run;
+    state.footprint = home.footprint;
   } catch {
     /* Keep what is on screen. */
   }
@@ -391,60 +367,96 @@ function radioGroup(name, current, options, onchange) {
   }));
 }
 
-function renderSettings() {
-  const keep = el("select", {
-    "aria-label": "每个磁盘保留的扫描次数",
-    onchange: (e) => { state.settings.keep_per_volume = Number(e.target.value); saveSettings(); },
-  }, ...[10, 20, 50, 100].map((n) => el("option", { value: String(n), text: `${n} 次` })));
-  keep.value = String(state.settings.keep_per_volume);
+function footprintRows() {
+  const f = state.footprint;
+  if (!f) return [];
+  const parts = [
+    ["程序", f.program, "var(--s0)"],
+    ["快照", f.snapshots, "var(--s2)"],
+    ["报告", f.reports, "var(--s6)"],
+    ["窗口缓存", f.webview, "var(--s3)"],
+    ["长期记录", f.records, "var(--s4)"],
+    ["其他", f.other, "var(--neutral)"],
+  ].filter(([, size]) => size > 0);
+  const meter = el("div", { class: "meter", "aria-hidden": "true" }, ...parts.map(([, size, color]) => {
+    const part = el("span");
+    part.style.width = `${Math.max(0.5, (size / f.limit) * 100).toFixed(2)}%`;
+    part.style.background = color;
+    return part;
+  }));
+  return [
+    el("div", { class: "row usage" },
+      el("div", { class: "usage-head" },
+        el("b", { text: bytes(f.total) }),
+        el("span", { text: `上限 ${bytes(f.limit)}，用多久都不会超过` })),
+      meter,
+      el("div", { class: "usage-keys" }, ...parts.map(([name, size, color]) => {
+        const dot = el("i");
+        dot.style.background = color;
+        return el("span", {}, dot, `${name} ${bytes(size)}`);
+      }))),
+  ];
+}
 
+function renderSettings() {
   view.replaceChildren(
     el("div", { class: "view-head" }, backButton(), el("h1", { text: "设置" })),
     el("h2", { class: "section-title", text: "扫描方式" }),
     radioGroup("scan-mode", state.settings.scan_mode, [
-      ["ask", "下次扫描时询问"],
-      ["fast", "极速扫描", "每次扫描在 Windows 弹窗里确认一次管理员权限"],
-      ["normal", "普通扫描", "不需要权限，部分系统目录会标为“未知”"],
+      ["fast", "极速扫描", "直接读取文件表，最快，能看到所有目录。每次在 Windows 弹窗里确认一次管理员权限"],
+      ["normal", "普通扫描", "不需要权限，慢一些，部分系统目录会标为“未知”"],
     ], (value) => { state.settings.scan_mode = value; saveSettings(); }),
     el("h2", { class: "section-title", text: "外观" }),
     radioGroup("theme", state.settings.theme, [
-      ["system", "跟随系统"],
+      ["dark", "纯黑"],
       ["light", "浅色"],
-      ["dark", "深色"],
+      ["system", "跟随系统"],
     ], (value) => {
       state.settings.theme = value;
       saveSettings();
       invoke("apply_theme", { theme: value }).catch(() => {});
     }),
-    el("h2", { class: "section-title", text: "历史" }),
+    el("h2", { class: "section-title", text: "占用" }),
     el("div", { class: "group" },
-      el("div", { class: "row" },
-        el("span", { class: "row-main" }, el("span", { class: "row-title", text: "每个磁盘保留" })),
-        keep),
+      ...footprintRows(),
       el("button", { type: "button", class: "row", onclick: () => invoke("open_data_folder").catch(() => {}) },
         el("span", { class: "row-main" },
           el("span", { class: "row-title", text: "打开数据文件夹" }),
           el("span", { class: "row-detail path", text: state.dataFolder })),
-        svg("0 0 8 13", "M1.5 1.5L6.5 6.5L1.5 11.5", "row-chevron"))),
-    el("p", { class: "section-note", text: "超出保留次数时，只删除 Diskly 自己保存的旧快照，不会碰你的文件。" }),
+        svg("0 0 8 13", "M1.5 1.5L6.5 6.5L1.5 11.5", "row-chevron")),
+      el("div", { class: "row" },
+        el("span", { class: "row-main" },
+          el("span", { class: "row-title", text: "程序位置" }),
+          el("span", { class: "row-detail path", text: state.program })))),
+    el("p", { class: "section-note", text: "每次扫描后自动清理：完整快照只留最新一份，更早的最多再留 2 次且只存目录，报告最多留 3 份。长期记录一直保留，越久越稀疏，只占几百 KB。只清理 Diskly 自己的文件，不会碰你的文件。" }),
     el("p", { class: "section-note", text: `Diskly ${state.version}。扫描内核来自 Diskghost，MIT 许可。不联网，不上传任何数据。` }));
 }
 
 /* ---- Navigation ---- */
 
+/* Going deeper pushes in from the right and going back from the left, as on iOS. */
 function show(screen) {
+  const back = screen === "home";
   state.screen = screen;
-  if (screen === "home") refreshVolumes();
+  if (screen === "home") {
+    renderHome();
+    refreshVolumes();
+  }
   if (screen === "history") renderHistory();
+  if (screen === "settings") refreshVolumes().finally(() => { if (state.screen === "settings") renderSettings(); });
   if (screen === "settings") renderSettings();
   view.scrollTop = 0;
   view.focus({ preventScroll: true });
+  if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    view.animate([
+      { transform: `translateX(${back ? -22 : 34}px)`, opacity: 0 },
+      { transform: "none", opacity: 1 },
+    ], { duration: 380, easing: "cubic-bezier(0.32, 0.72, 0, 1)" });
+  }
 }
 
 document.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape") return;
-  if (sheetLayer.firstChild) sheetLayer.replaceChildren();
-  else if (state.screen !== "home") show("home");
+  if (event.key === "Escape" && state.screen !== "home") show("home");
 });
 
 document.getElementById("window-minimize").addEventListener("click", () => tauri.window.getCurrentWindow().minimize());
@@ -460,6 +472,8 @@ document.getElementById("window-close").addEventListener("click", () => tauri.wi
       settings: home.settings,
       lastRun: home.last_run,
       dataFolder: home.data_folder,
+      program: home.program,
+      footprint: home.footprint,
       version: home.version,
     });
     if (home.mica) document.documentElement.dataset.backdrop = "mica";
