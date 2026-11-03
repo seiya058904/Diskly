@@ -87,10 +87,10 @@ export class Page {
   async goto(url) {
     this.consoleErrors.length = 0;
     this.requests.length = 0;
-    const loaded = new Promise((resolve) => this.on("Page.loadEventFired", resolve));
+    /* When this returns the new document is in place, so asking it is safe. A load
+       event could be a late one from the page before. */
     await this.send("Page.navigate", { url });
-    await loaded;
-    await sleep(60);
+    await this.waitFor(`document.readyState === "complete"`);
   }
 
   /** Evaluate an expression in the page; its promise is awaited. */

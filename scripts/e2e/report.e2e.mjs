@@ -239,11 +239,12 @@ try {
     await page.viewport(1280, 900);
     await page.media({ colorScheme: "dark" });
     await page.goto(url("normal"));
-    const background = () => page.eval(`getComputedStyle(document.documentElement).backgroundColor`);
-    assert.equal(await background(), "rgb(0, 0, 0)");
+    /* light-dark() follows a change of color-scheme on the next frame, not at once. */
+    const backgroundBecomes = (color) => page.waitFor(`getComputedStyle(document.documentElement).backgroundColor === "${color}"`, 1000);
+    await backgroundBecomes("rgb(0, 0, 0)");
     await page.click('.icon-button');
     assert.equal(await page.eval(`document.documentElement.dataset.theme`), "light");
-    assert.equal(await background(), "rgb(242, 242, 247)");
+    await backgroundBecomes("rgb(242, 242, 247)");
     await page.click('.icon-button');
     assert.equal(await page.eval(`document.documentElement.dataset.theme`), "dark");
     await page.click('.icon-button');
