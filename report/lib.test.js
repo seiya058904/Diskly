@@ -79,6 +79,167 @@ const node = (volume, path) => {
 
 const two = () => [snap("000000000100-a"), snap("000000000200-b", { free_bytes: 290 * GB })];
 
+/* ---- The map ---- */
+
+test("a map fills its space, in proportion, with nothing overlapping", () => {
+  const values = [500, 433, 78, 25, 25, 25, 12, 8, 3, 1];
+  const rects = lib.squarify(values, 10, 20, 800, 400);
+  assert.equal(rects.length, values.length);
+  const total = values.reduce((a, b) => a + b, 0);
+  rects.forEach((r, i) => {
+    assert.ok(Math.abs(r.w * r.h - (values[i] / total) * 800 * 400) < 0.01, `area of ${i}`);
+    assert.ok(r.x >= 10 - 1e-6 && r.y >= 20 - 1e-6 && r.x + r.w <= 810 + 1e-6 && r.y + r.h <= 420 + 1e-6, `bounds of ${i}`);
+  });
+  for (let i = 0; i < rects.length; i += 1) {
+    for (let j = i + 1; j < rects.length; j += 1) {
+      const [p, q] = [rects[i], rects[j]];
+      const overlapX = Math.min(p.x + p.w, q.x + q.w) - Math.max(p.x, q.x);
+      const overlapY = Math.min(p.y + p.h, q.y + q.h) - Math.max(p.y, q.y);
+      assert.ok(overlapX <= 1e-6 || overlapY <= 1e-6, `${i} and ${j} overlap`);
+    }
+  }
+  // Mostly near square, which is the point of it.
+  const worst = Math.max(...rects.slice(0, 4).map((r) => Math.max(r.w / r.h, r.h / r.w)));
+  assert.ok(worst < 4, `aspect ${worst}`);
+});
+
+test("a map of nothing, or into no room, is empty rather than broken", () => {
+  assert.deepEqual(lib.squarify([], 0, 0, 100, 100), []);
+  assert.deepEqual(lib.squarify([5], 0, 0, 0, 100), []);
+  assert.deepEqual(lib.squarify([0], 0, 0, 100, 100), []);
+  assert.equal(lib.squarify([5], 0, 0, 100, 50)[0].w, 100);
+});
+
+test("the folders that take the most space are the ones that explain it", () => {
+  const volume = volumeOf(
+    [
+      ["Users", 900, 900],
+      ["Users\\Alex", 880, 880],
+      ["Users\\Alex\\Docker", 700, 700],
+      ["Users\\Alex\\Music", 150, 150],
+      ["Windows", 400, 400],
+      ["Windows\\tiny", 10, 10],
+      ["secret", 0, 0],
+    ],
+    { snapshots: two(), unread: [[], ["secret"]] },
+  );
+  const paths = lib.sizeHotspots(volume, 1, 10).map((i) => lib.pathOf(volume.table, i));
+  // Users goes down to what fills it. Windows stays: the one folder in it says nothing.
+  assert.deepEqual(paths, ["Users\\Alex\\Docker", "Windows", "Users\\Alex\\Music"]);
+  assert.ok(!paths.includes("secret"), "an unread folder has no size to rank");
+});
+
+/* ---- Where the space went ---- */
+
+test("what the disks hold adds up across disks, and largest comes first", () => {
+  const insights = (over) => ({ files: [], kinds: [], extensions: [], ranges: [], spots: [], top_folders: [], ...over });
+  const c = volumeOf([["a", 1, 1]], { snapshots: two() });
+  c.insights = {
+    "000000000200-b": insights({
+      files: [{ path: "a\\x.iso", size: 500, kind: "archive" }],
+      kinds: [{ kind: "archive", size: 500, count: 1 }, { kind: "video", size: 100, count: 2 }],
+      extensions: [{ ext: "iso", kind: "archive", size: 500, count: 1 }],
+      ranges: [{ upper: 1024, size: 10, count: 5 }, { upper: null, size: 500, count: 1 }],
+      spots: [{ id: "temp", size: 40, places: 1, largest: "t", largest_size: 40 }],
+    }),
+  };
+  const d = volumeOf([["b", 1, 1]], { snapshots: two().map((s) => ({ ...s, letter: "D" })), letter: "D" });
+  d.key = "v-g2";
+  d.insights = {
+    "000000000200-b": insights({
+      files: [{ path: "b\\y.mkv", size: 900, kind: "video" }],
+      kinds: [{ kind: "video", size: 900, count: 1 }],
+      extensions: [{ ext: "mkv", kind: "video", size: 900, count: 1 }, { ext: "iso", kind: "archive", size: 1, count: 1 }],
+      ranges: [{ upper: 1024, size: 1, count: 1 }, { upper: null, size: 900, count: 1 }],
+      spots: [{ id: "temp", size: 70, places: 2, largest: "u", largest_size: 50 }],
+    }),
+  };
+  const merged = lib.mergeInsights(lib.resolvePairs([c, d]));
+  assert.deepEqual(merged.files.map((f) => `${f.letter}:${f.size}`), ["D:900", "C:500"]);
+  assert.deepEqual(merged.kinds.map((k) => [k.kind, k.size, k.count]), [["video", 1000, 3], ["archive", 500, 1]]);
+  assert.equal(merged.extensions[1].size, 501);
+  assert.deepEqual(merged.ranges.map((r) => r.size), [11, 1400]);
+  assert.equal(merged.spots[0].size, 110);
+  assert.equal(merged.spots[0].largest, "u", "the larger one on either disk");
+  assert.equal(merged.spots[0].letter, "D");
+  assert.equal(lib.mergeInsights(lib.resolvePairs([volumeOf([["a", 1, 1]], { snapshots: two() })])), null);
+});
+
+test("every kind and well-known place from a scan has words for it", () => {
+  for (const kind of ["video", "image", "audio", "document", "archive", "program", "code", "other"]) {
+    assert.notEqual(lib.kindLabel(kind), "");
+    assert.ok(lib.KINDS.some((k) => k.id === kind));
+  }
+  const fromRust = ["recycle", "windows-old", "restore", "winsxs", "temp", "update-cache", "installers", "downloads", "containers", "dev-cache", "dev-deps", "games", "app-cache", "system-files"];
+  for (const id of fromRust) assert.ok(lib.SPOTS[id]?.label && lib.SPOTS[id]?.note, id);
+});
+
+test("the sentence about file sizes says how few files hold half the space", () => {
+  const MB = 1024 ** 2;
+  const line = lib.bigFilesLine([
+    { upper: 4096, size: 2 * GB, count: 900000 },
+    { upper: MB, size: 20 * GB, count: 90000 },
+    { upper: GB, size: 30 * GB, count: 2000 },
+    { upper: null, size: 60 * GB, count: 12 },
+  ]);
+  assert.match(line, /^1 GB 以上的 12 个文件占了 54% 的空间，它们只是所有文件的 不到 1%。$/);
+  assert.equal(lib.bigFilesLine([]), null);
+  assert.equal(lib.bigFilesLine([{ upper: null, size: 0, count: 0 }]), null);
+  assert.equal(lib.rangeLabel(0, 4096), "4 KB 以下");
+  assert.equal(lib.rangeLabel(MB, GB), "1 MB 到 1 GB");
+  assert.equal(lib.rangeLabel(GB, null), "1 GB 以上");
+});
+
+/* ---- The long view ---- */
+
+test("a disk that fills steadily gets a forecast, and one that does not gets none", () => {
+  const DAY = 86400;
+  const now = 1000 * DAY;
+  const at = (days, usedGb) => ({ id: String(days), at: now - days * DAY, engine: "mft", total: 500 * GB, free: (500 - usedGb) * GB, top: [] });
+  const filling = [at(80, 200), at(50, 215), at(20, 230), at(0, 240)];
+  const f = lib.forecast(filling, now);
+  assert.ok(f.perMonth > 12 * GB && f.perMonth < 18 * GB, String(f.perMonth / GB));
+  assert.ok(f.months > 15 && f.months < 22, String(f.months));
+  assert.match(lib.forecastLine("C", f), /^C: 最近每月多用约 .+个月后写满。$/);
+
+  assert.equal(lib.forecast(filling.slice(0, 2), now), null, "too few");
+  assert.equal(lib.forecast([at(3, 200), at(2, 210), at(1, 220)], now), null, "too short a time");
+  assert.equal(lib.forecast([at(80, 240), at(40, 235), at(0, 200)], now), null, "shrinking");
+  assert.equal(lib.forecast([at(80, 200), at(40, 200), at(0, 200)], now), null, "flat");
+  assert.equal(lib.forecast(undefined, now), null);
+  const slow = [at(80, 1), at(40, 2), at(0, 3)];
+  assert.match(lib.forecastLine("C", lib.forecast(slow, now)), /短期内不会写满/);
+});
+
+test("the long-term view only compares what both ends know, with one engine", () => {
+  const record = (id, engine, top) => ({ id, at: Number(id), engine, total: 1, free: 0, top });
+  const MB = 1024 ** 2;
+  const list = [
+    record("1", "walk", [["Users", 1 * MB]]),
+    record("2", "mft", [["Users", 10 * MB], ["Windows", 5 * MB], ["Gone", 7 * MB]]),
+    record("3", "mft", []),
+    record("4", "mft", [["Users", 30 * MB], ["Windows", 1 * MB], ["New", 99 * MB]]),
+  ];
+  const view = lib.longTerm(list);
+  assert.equal(view.from, 2, "the oldest of the same engine");
+  assert.deepEqual(view.rows.map((r) => [r.name, r.delta]), [["Users", 20 * MB], ["Windows", -4 * MB]]);
+  assert.equal(lib.longTerm([record("9", "mft", [["a", 1]])]), null, "one scan");
+  assert.equal(lib.longTerm([]), null);
+  assert.equal(lib.longTerm(undefined), null);
+});
+
+test("a disk whose earlier snapshots had to go says so, instead of calling it new", () => {
+  const volume = volumeOf([["a", 5]], { snapshots: [snap("000000000300-c")] });
+  volume.records = [{ id: "x" }, { id: "y" }];
+  const [pair] = lib.withComparisons(lib.resolvePairs([volume]));
+  assert.equal(pair.reason, "pruned");
+  assert.equal(pair.cmp, null);
+  assert.match(lib.headline([pair]).title, /无法比较/);
+  assert.match(lib.reasonText("pruned"), /占用上限/);
+  volume.records = [{ id: "only" }];
+  assert.equal(lib.resolvePairs([volume])[0].reason, "first");
+});
+
 /* ---- Comparing ---- */
 
 test("growth, shrinkage, new and removed folders are told apart", () => {
@@ -429,7 +590,7 @@ function promptVolume() {
 
 test("the prompt holds the question, the numbers and the unknowns", () => {
   const text = lib.buildPrompt(promptVolume());
-  for (const needed of ["【请回答】", "【C: 盘】", "系统已用空间变化 +10.0 GB", "变大最多的目录", "变小最多的目录", "未能读取的目录共 1 个", "a.zip", "−1.0 GB"]) {
+  for (const needed of ["【请回答】", "【C: 盘】", "系统已用空间变化 +10.0 GB", "变大最多的目录", "释放最多的目录", "未能读取的目录共 1 个", "a.zip", "−1.0 GB"]) {
     assert.ok(text.includes(needed), needed);
   }
 });

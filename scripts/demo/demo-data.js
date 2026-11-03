@@ -3,7 +3,7 @@
 /* Made-up report data for looking at and testing the report page: a believable
    machine with no real paths on it. Usage:
    node scripts/demo/demo-data.js <scenario> > data.json
-   Scenarios: normal, first, walk-unknown, engines, hostile, empty, big */
+   Scenarios: normal, first, walk-unknown, engines, hostile, pruned, empty, big */
 
 const GB = 1024 ** 3;
 const MB = 1024 ** 2;
@@ -111,13 +111,140 @@ function fileChanges(base) {
   };
 }
 
+const file = (path, size, kind) => ({ path, size, kind });
+
+/* Where the space went, in the shape the scan writes it. */
+function insightsOf(files, kinds, ranges, spots, extensions) {
+  return { files, kinds, extensions, ranges, spots, top_folders: [] };
+}
+
+const RANGES = (a, b, c, d, e, f, g, h) => [
+  { upper: 4096, size: a * GB, count: 240000 },
+  { upper: 65536, size: b * GB, count: 210000 },
+  { upper: MB, size: c * GB, count: 120000 },
+  { upper: 16 * MB, size: d * GB, count: 22000 },
+  { upper: 128 * MB, size: e * GB, count: 1500 },
+  { upper: GB, size: f * GB, count: 120 },
+  { upper: 4 * GB, size: g * GB, count: 9 },
+  { upper: null, size: h * GB, count: 2 },
+];
+
+const C_INSIGHTS = insightsOf(
+  [
+    file("Users\\Alex\\AppData\\Local\\Docker\\wsl\\main\\ext4.vhdx", 11.2 * GB, "archive"),
+    file("hiberfil.sys", 6.3 * GB, "program"),
+    file("pagefile.sys", 4 * GB, "program"),
+    file("Users\\Alex\\Downloads\\Installers\\VisualStudioSetup-offline.iso", 2.3 * GB, "archive"),
+    file("Users\\Alex\\Videos\\Captures\\meeting-recording-2026-10-28.mp4", 1.9 * GB, "video"),
+    file("Users\\Alex\\Downloads\\ubuntu-24.04-desktop-amd64.iso", 1.6 * GB, "archive"),
+    file("Users\\Alex\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\History", 240 * MB, "other"),
+    file("Program Files\\Docker\\Docker\\resources\\docker-desktop.iso", 620 * MB, "archive"),
+    file("Users\\Alex\\Documents\\Reports\\annual-report-2025.pdf", 410 * MB, "document"),
+    file("Users\\Alex\\Pictures\\Screenshots\\wallpaper-8k.png", 180 * MB, "image"),
+    file("Windows\\System32\\MRT.exe", 150 * MB, "program"),
+    file("Users\\Alex\\Music\\album-live-session.flac", 96 * MB, "audio"),
+    file("Users\\Alex\\Downloads\\report-2026-q3.pdf", 41 * MB, "document"),
+  ],
+  [
+    { kind: "program", size: 41 * GB, count: 182000 },
+    { kind: "archive", size: 18.6 * GB, count: 900 },
+    { kind: "other", size: 21 * GB, count: 240000 },
+    { kind: "code", size: 7.4 * GB, count: 150000 },
+    { kind: "video", size: 3.2 * GB, count: 40 },
+    { kind: "image", size: 2.1 * GB, count: 18000 },
+    { kind: "document", size: 1.2 * GB, count: 900 },
+    { kind: "audio", size: 0.3 * GB, count: 160 },
+  ],
+  RANGES(0.8, 4.2, 12, 22, 18, 21, 8.5, 11.2),
+  [
+    { id: "containers", size: 11.8 * GB, places: 1, largest: "Users\\Alex\\AppData\\Local\\Docker", largest_size: 11.8 * GB },
+    { id: "downloads", size: 12.8 * GB, places: 1, largest: "Users\\Alex\\Downloads", largest_size: 12.8 * GB },
+    { id: "winsxs", size: 10.4 * GB, places: 1, largest: "Windows\\WinSxS", largest_size: 10.4 * GB },
+    { id: "system-files", size: 10.3 * GB, places: 2, largest: "hiberfil.sys", largest_size: 6.3 * GB },
+    { id: "app-cache", size: 3.1 * GB, places: 26, largest: "Users\\Alex\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache", largest_size: 1.4 * GB },
+    { id: "restore", size: 4.1 * GB, places: 1, largest: "System Volume Information", largest_size: 4.1 * GB },
+    { id: "temp", size: 2.4 * GB, places: 1, largest: "Users\\Alex\\AppData\\Local\\Temp", largest_size: 2.4 * GB },
+    { id: "update-cache", size: 1.6 * GB, places: 1, largest: "Windows\\SoftwareDistribution\\Download", largest_size: 1.6 * GB },
+  ],
+  [
+    { ext: "dll", kind: "program", size: 22 * GB, count: 91000 },
+    { ext: "vhdx", kind: "archive", size: 11.2 * GB, count: 1 },
+    { ext: "sys", kind: "program", size: 10.8 * GB, count: 880 },
+    { ext: "exe", kind: "program", size: 6.2 * GB, count: 8100 },
+    { ext: "iso", kind: "archive", size: 4.5 * GB, count: 3 },
+    { ext: "pak", kind: "other", size: 3.9 * GB, count: 1200 },
+    { ext: "mp4", kind: "video", size: 3.2 * GB, count: 40 },
+    { ext: "log", kind: "other", size: 2.8 * GB, count: 16000 },
+    { ext: "js", kind: "code", size: 2.4 * GB, count: 62000 },
+    { ext: "", kind: "other", size: 2.1 * GB, count: 41000 },
+    { ext: "png", kind: "image", size: 1.6 * GB, count: 14000 },
+    { ext: "pdf", kind: "document", size: 1.1 * GB, count: 400 },
+  ],
+);
+
+const D_INSIGHTS = insightsOf(
+  [
+    file("Games\\SteamLibrary\\steamapps\\common\\Cyber\\archive\\pc\\content\\basegame_4_gi.archive", 28 * GB, "other"),
+    file("Backup\\laptop-image-2026.vhdx", 19 * GB, "archive"),
+    file("Photos\\2025\\wedding-video-final.mov", 8.8 * GB, "video"),
+    file("Projects\\engine\\target\\release\\deps\\libengine.rlib", 1.2 * GB, "code"),
+    file("Photos\\2025\\raw\\IMG_2231.CR3", 72 * MB, "image"),
+    file("Music\\collection.zip", 3.4 * GB, "archive"),
+  ],
+  [
+    { kind: "other", size: 88 * GB, count: 12000 },
+    { kind: "image", size: 40 * GB, count: 42000 },
+    { kind: "archive", size: 24 * GB, count: 800 },
+    { kind: "code", size: 12 * GB, count: 51000 },
+    { kind: "video", size: 8.5 * GB, count: 120 },
+    { kind: "program", size: 3 * GB, count: 4000 },
+  ],
+  RANGES(0.1, 0.9, 6, 39, 30, 32, 21, 47),
+  [
+    { id: "games", size: 91 * GB, places: 1, largest: "Games\\SteamLibrary\\steamapps", largest_size: 91 * GB },
+    { id: "dev-deps", size: 2.2 * GB, places: 14, largest: "Projects\\website\\node_modules", largest_size: 2.2 * GB },
+    { id: "recycle", size: 0.6 * GB, places: 1, largest: "$Recycle.Bin", largest_size: 0.6 * GB },
+  ],
+  [
+    { ext: "archive", kind: "other", size: 62 * GB, count: 40 },
+    { ext: "cr3", kind: "image", size: 34 * GB, count: 1400 },
+    { ext: "vhdx", kind: "archive", size: 19 * GB, count: 1 },
+    { ext: "mov", kind: "video", size: 8.5 * GB, count: 12 },
+    { ext: "rlib", kind: "code", size: 7.2 * GB, count: 3100 },
+  ],
+);
+
+/* A year of scans: the snapshots are long gone, these small lines stay. */
+function recordsOf(letter, total, usedNow, perMonthGb, topNow) {
+  const out = [];
+  const count = 30;
+  for (let i = count - 1; i >= 0; i -= 1) {
+    const age = (i * i * 0.42) * DAY;
+    const wobble = Math.sin(i * 1.7) * 0.8;
+    const usedGb = usedNow - (age / (30.44 * DAY)) * perMonthGb + (i ? wobble : 0);
+    out.push({
+      id: `${String(NOW - age).padStart(12, "0")}-r${i}`, at: NOW - age, letter, engine: "mft",
+      total, free: total - usedGb * GB, files: 500000, dirs: 90000,
+      top: i === count - 1 ? topNow.map(([n, g]) => [n, g * 0.72 * GB]) : i === 0 ? topNow.map(([n, g]) => [n, g * GB]) : [],
+    });
+  }
+  return out;
+}
+
+function footprint(over) {
+  return {
+    limit: 50 * MB, program: 10.9 * MB, webview: 2.2 * MB, snapshots: 9.7 * MB, reports: 5 * MB, records: 0.2 * MB, other: 0.03 * MB,
+    total: 28 * MB, scans_kept: 6, reports_kept: 3, records_kept: 60, keep_snapshots: 3, keep_reports: 3, ...over,
+  };
+}
+
 function volume(key, letter, label, snaps, table, over) {
   const last = snaps[snaps.length - 1];
   return {
     key, letter, label, connected: true,
     total_bytes: last ? last.total_bytes : null,
     free_bytes: last ? last.free_bytes : null,
-    this_run: null, snapshots: snaps, table, file_changes: {}, issues: [], ...over,
+    this_run: null, snapshots: snaps, table, file_changes: {}, insights: {}, records: [], issues: [], ...over,
   };
 }
 
@@ -129,13 +256,19 @@ function cVolume(over) {
   const snaps = TIMES.map((t, i) => snapshotView(ids[i], t, "C", "Windows", 475 * GB, (475 - used[i]) * GB, 590000 + i * 3000, 118000, over?.snap));
   const v = volume("v-guid-c", "C", "Windows", snaps, tableOf(C_ROWS, 4));
   v.file_changes[ids[3]] = fileChanges(ids[2]);
+  v.insights[ids[3]] = C_INSIGHTS;
+  v.insights[ids[2]] = C_INSIGHTS;
+  v.records = recordsOf("C", 475 * GB, 118, 5.5, [["Users", 56.2], ["Windows", 33.4], ["Program Files", 19.9], ["ProgramData", 3.8]]);
   return v;
 }
 
 function dVolume() {
   const used = [196, 197, 200, 176];
   const snaps = TIMES.map((t, i) => snapshotView(ids[i], t, "D", "Data", 931 * GB, (931 - used[i]) * GB, 118000, 16000));
-  return volume("v-guid-d", "D", "Data", snaps, tableOf(D_ROWS, 4));
+  const v = volume("v-guid-d", "D", "Data", snaps, tableOf(D_ROWS, 4));
+  v.insights[ids[3]] = D_INSIGHTS;
+  v.records = recordsOf("D", 931 * GB, 176, 1.2, [["Games", 91], ["Photos", 48.5], ["Backup", 21], ["Projects", 15.4]]);
+  return v;
 }
 
 function eVolume() {
@@ -157,7 +290,7 @@ function run(volumes, over) {
 }
 
 function page(volumes, runOver) {
-  return { format: 1, app_version: "0.1.0", generated_at: NOW, run: run(volumes, runOver), volumes };
+  return { format: 2, app_version: "0.2.0", generated_at: NOW, theme: "dark", footprint: footprint(), run: run(volumes, runOver), volumes };
 }
 
 const SCENARIOS = {
@@ -168,9 +301,11 @@ const SCENARIOS = {
     c.snapshots = [c.snapshots[3]];
     c.table = tableOf(C_ROWS.map((r) => [r[0], r[4]]), 1);
     c.file_changes = {};
+    c.records = c.records.slice(-1);
     const d = dVolume();
     d.snapshots = [d.snapshots[3]];
     d.table = tableOf(D_ROWS.filter((r) => r[4] !== null).map((r) => [r[0], r[4]]), 1);
+    d.records = d.records.slice(-1);
     return page([c, d]);
   },
 
@@ -203,6 +338,7 @@ const SCENARIOS = {
     c.snapshots[0].engine = "walk";
     c.table = tableOf(C_ROWS.map((r) => [r[0], r[3], r[4]]), 2);
     c.file_changes = {};
+    c.records = [];
     return page([c]);
   },
 
@@ -226,13 +362,34 @@ const SCENARIOS = {
       added: [{ path: `${bad}\\</script><script>window.__pwned=4</script>.txt`, old: 0, new: 3 * GB }],
       removed: [], changed: [], added_count: 1, added_bytes: 3 * GB, removed_count: 0, removed_bytes: 0, changed_count: 0, changed_delta: 0,
     };
+    v.insights[ids[3]] = insightsOf(
+      [file(`${bad}\\</script><script>window.__pwned=7</script>.bin`, 3 * GB, "other")],
+      [{ kind: "<img src=x onerror=\"window.__pwned=8\">", size: 3 * GB, count: 1 }, { kind: "other", size: 1 * GB, count: 4 }],
+      RANGES(0, 0, 0, 0, 0, 0, 0, 3),
+      [{ id: `<img src=x onerror="window.__pwned=9">`, size: 3 * GB, places: 1, largest: bad, largest_size: 3 * GB }, { id: "temp", size: 1 * GB, places: 1, largest: `${bad}\\x`, largest_size: 1 * GB }],
+      [{ ext: `<img src=x onerror="window.__pwned=10">`, kind: "other", size: 3 * GB, count: 1 }],
+    );
+    v.records = [
+      { id: "1", at: TIMES[0], letter: "C", engine: "mft", total: 475 * GB, free: 410 * GB, files: 1, dirs: 1, top: [[bad, 1 * GB]] },
+      { id: "2", at: TIMES[1], letter: "C", engine: "mft", total: 475 * GB, free: 405 * GB, files: 1, dirs: 1, top: [] },
+      { id: "3", at: TIMES[3], letter: "C", engine: "mft", total: 475 * GB, free: 395 * GB, files: 1, dirs: 1, top: [[bad, 5 * GB]] },
+    ];
     v.issues = [`<img src=x onerror="window.__pwned=5">`];
     return page([v], {
       volumes: [{ letter: "C", label, volume_key: v.key, status: "failed", engine: "none", mft_fallback: null, seconds: 0, files: 0, bytes: 0, error: `<img src=x onerror="window.__pwned=6">`, stored: false }],
     });
   },
 
-  empty: () => ({ format: 1, app_version: "0.1.0", generated_at: NOW, run: null, volumes: [] }),
+  /* A disk with too many files: its last full snapshot did not fit under the limit. */
+  pruned: () => {
+    const c = cVolume();
+    c.snapshots = [c.snapshots[3]];
+    c.table = tableOf(C_ROWS.map((r) => [r[0], r[4]]), 1);
+    c.file_changes = {};
+    return page([c]);
+  },
+
+  empty: () => ({ format: 2, app_version: "0.2.0", generated_at: NOW, theme: "dark", footprint: footprint({ snapshots: 0, reports: 0, records: 0, total: 13 * MB }), run: null, volumes: [] }),
 
   /* As many folders as a report can hold, for checking speed and size. */
   big: () => {

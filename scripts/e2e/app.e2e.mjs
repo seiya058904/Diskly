@@ -3,7 +3,8 @@
 // folder, which is on a scanned disk, and removes exactly those at the end.
 //
 // node app.e2e.mjs <diskly.exe> <work folder> <phase>
-//   basic         a normal scan, a change, a second scan, cancel, history, settings
+//   basic         a normal scan, a change, a second scan, cancel, history, settings,
+//                 and what it all takes on disk
 //   browser       a normal scan that opens its report in the real default browser
 //   uac-accept    two fast scans: answer YES to both Windows prompts
 //   uac-decline   a fast scan: answer NO to the Windows prompt
@@ -11,7 +12,7 @@
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +29,10 @@ const dataDir = join(work, "app-data", "Diskly", "Data");
 const shots = join(work, "shots");
 const scratch = join(repo, "target", "e2e-scratch");
 mkdirSync(dataDir, { recursive: true });
+/* The app scans the fastest way by default, which asks for rights. These phases say
+   how to scan first, so that only the uac phases meet a prompt. */
+const settingsFile = join(dataDir, "settings.json");
+if (!existsSync(settingsFile)) writeFileSync(settingsFile, JSON.stringify({ scan_mode: "normal", theme: "dark" }));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
@@ -55,7 +60,8 @@ function startApp(extraEnv) {
       ...process.env,
       DISKLY_DATA_DIR: dataDir,
       DISKLY_NO_BROWSER: "1",
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${PORT}`,
+      /* This replaces the flags the app sets, so the ones that keep its cache small go along. */
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${PORT} --disable-component-update --disable-background-networking --no-pings --disable-gpu-shader-disk-cache --disk-cache-size=1048576 --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,PersistentHistograms`,
       ...extraEnv,
     },
   });
@@ -74,7 +80,7 @@ const lead = () => page.eval(`document.querySelector(".lead")?.textContent ?? ""
 const screen = () => page.eval(`document.getElementById("view").textContent`);
 
 async function waitForScanToEnd(timeout = 240000) {
-  await page.waitFor(`(() => { const b = document.getElementById("scan-button"); return b && !b.classList.contains("quiet") && !document.getElementById("sheet-layer").firstChild; })()`, timeout);
+  await page.waitFor(`(() => { const b = document.getElementById("scan-button"); return b && !b.classList.contains("quiet"); })()`, timeout);
 }
 
 /* ---- What the app left behind ---- */
@@ -96,7 +102,7 @@ function history(letter) {
   const out = [];
   for (const key of readdirSync(root)) {
     for (const file of readdirSync(join(root, key))) {
-      if (!file.endsWith(".json") || file.endsWith(".files.json")) continue;
+      if (!/^[^.]+\.json$/.test(file)) continue;
       const meta = JSON.parse(readFileSync(join(root, key, file), "utf8"));
       if (meta.letter === letter) out.push(meta);
     }
@@ -159,19 +165,9 @@ async function basic() {
     capture("01-home");
   });
 
-  await check("the first scan asks how to scan, and can be backed out of", async () => {
-    await page.click("#scan-button");
-    assert.equal(await page.eval(`document.querySelectorAll('.sheet [data-mode]').length`), 2);
-    capture("02-ask");
-    await page.press("Escape", "Escape", 27);
-    assert.equal(await page.eval(`document.getElementById("sheet-layer").firstChild === null`), true);
-    assert.equal(existsSync(join(dataDir, "runs")) ? runs().length : 0, 0, "nothing started");
-  });
-
   let first;
-  await check("a normal scan shows progress and finishes with a baseline", async () => {
+  await check("a scan starts at once, shows progress and finishes with a baseline", async () => {
     await page.click("#scan-button");
-    await page.click('.sheet [data-mode="normal"]');
     await page.waitFor(`document.querySelector(".disk-note")`);
     await sleep(700);
     capture("03-scanning");
@@ -291,10 +287,11 @@ async function basic() {
     assert.equal(await page.eval(`document.documentElement.dataset.theme`), "light");
     capture("07-settings-light");
     assert.equal(JSON.parse(readFileSync(join(dataDir, "settings.json"), "utf8")).theme, "light");
-    await page.click('input[name="theme"][value="system"]');
-    await page.eval(`(() => { const s = document.querySelector("select"); s.value = "50"; s.dispatchEvent(new Event("change")); })()`);
+    await page.click('input[name="theme"][value="dark"]');
     await sleep(200);
-    assert.equal(JSON.parse(readFileSync(join(dataDir, "settings.json"), "utf8")).keep_per_volume, 50);
+    assert.match(await screen(), /用多久都不会超过/);
+    assert.match(await screen(), /程序位置/);
+    capture("07-settings-dark");
     await page.press("Escape", "Escape", 27);
   });
 
@@ -316,7 +313,7 @@ async function basic() {
     assert.equal(refused, true);
     const opened = await page.eval(`window.__TAURI__.core.invoke("open_report", { scanId: "..\\\\..\\\\windows" }).then(() => true, () => false)`);
     assert.equal(opened, false);
-    const bad = await page.eval(`window.__TAURI__.core.invoke("save_settings", { settings: { scan_mode: "x", theme: "system", keep_per_volume: 20 } }).then(() => false, () => true)`);
+    const bad = await page.eval(`window.__TAURI__.core.invoke("save_settings", { settings: { scan_mode: "x", theme: "system" } }).then(() => false, () => true)`);
     assert.equal(bad, true);
   });
 
@@ -325,6 +322,43 @@ async function basic() {
     assert.equal(denied, true);
     assert.equal(await page.eval(`(async () => { try { await fetch("https://example.com"); return false; } catch { return true; } })()`), true, "no network from the window");
     assert.deepEqual(page.consoleErrors.filter((e) => !e.includes("example.com") && !e.includes("plugin:shell") && !e.includes("Content Security Policy")), []);
+  });
+
+  await check("all of it stays small: the program, the window's cache and the data", async () => {
+    const folderSize = (dir) => {
+      let total = 0;
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) total += folderSize(path);
+        else if (entry.isFile()) total += statSync(path).size;
+      }
+      return total;
+    };
+    const webview = join(dataDir, "..", "WebView");
+    assert.ok(existsSync(webview), "the window's cache is next to the data, not elsewhere");
+    const program = statSync(exe).size;
+    const cache = folderSize(webview);
+    const data = folderSize(dataDir);
+    console.log(`      program ${(program / MB).toFixed(1)} MB, cache ${(cache / MB).toFixed(1)} MB, data ${(data / MB).toFixed(1)} MB`);
+    assert.ok(cache < 6 * MB, `the window's cache takes ${cache}`);
+    assert.ok(!existsSync(join(webview, "EBWebView", "WidevineCdm")), "nothing was downloaded");
+    assert.ok(folderSize(join(webview, "EBWebView", "component_crx_cache")) < 1024, "nothing was downloaded");
+    assert.ok(program + cache + data < 50 * MB, `${(program + cache + data) / MB} MB in all`);
+  });
+
+  await check("the report's data says what is kept, and older scans have only their folders", async () => {
+    const run = runs().filter((r) => r.report_file).at(-1);
+    const data = reportData(run);
+    assert.equal(data.footprint.limit, 50 * MB);
+    assert.ok(data.footprint.total > 0 && data.footprint.total < 50 * MB, String(data.footprint.total));
+    assert.equal(data.footprint.keep_snapshots, 3);
+    const volume = scratchVolume(data);
+    assert.ok(volume.records.length >= 2, "records of each scan");
+    const insights = volume.insights[volume.snapshots.at(-1).id];
+    assert.ok(insights.files.length > 0 && insights.kinds.length > 0);
+    assert.ok(insights.files.some((f) => f.path.endsWith("grows\\big.bin")), "a real big file is found");
+    const history = readdirSync(join(dataDir, "history", volume.key));
+    assert.ok(history.some((f) => f.endsWith(".dirs.dgs")), "older scans are slimmed");
   });
 }
 

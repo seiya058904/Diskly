@@ -43,6 +43,16 @@ try {
     await page.click("#ai-dialog .pill.quiet");
   });
 
+  await check("names in the new sections are text too: files, kinds and places", async () => {
+    await openClean("hostile");
+    const page_ = await text("#app");
+    assert.ok(page_.includes("onerror"), "the hostile names are shown as text");
+    await page.eval(`document.querySelectorAll("#largest .item, #spots .item, .tile:not(.rest)").forEach((e) => e.dispatchEvent(new PointerEvent("pointermove", { bubbles: true })))`);
+    assert.equal(await page.eval("window.__pwned === undefined"), true);
+    assert.equal(await count("#app img, #app script, .tip img, .toast img"), 0);
+    assert.deepEqual(page.consoleErrors, []);
+  });
+
   await check("the page requests nothing from any network", async () => {
     await openClean("normal");
     await page.click("#open-ai");
@@ -104,6 +114,135 @@ try {
     await page.eval(`[...document.querySelectorAll('.segments[aria-label="排序方式"] button')].find((b) => b.textContent === "按变化").click()`);
     const first = (await texts("#folders .folder-name"))[0];
     assert.equal(first, "Users");
+  });
+
+  await check("the biggest files come first, and nothing ranks what is small", async () => {
+    await openClean("normal");
+    const sizes = await page.eval(`[...document.querySelectorAll("#largest .item-size")].map((e) => e.textContent)`);
+    assert.equal(sizes[0], "28.0 GB", "the biggest file on any disk");
+    assert.equal(await text("#largest .item-name"), "basegame_4_gi.archive");
+    const all = await text("#app");
+    assert.ok(!all.includes("最小"), "nobody asked about the smallest");
+    assert.ok(!all.includes("变小最多"), "freed space is a detail, under its own name");
+    assert.equal(await page.eval(`document.querySelector("details.freed").open`), false, "and closed by default");
+    assert.ok((await text("#facts")).includes("最大的文件"));
+    assert.ok((await text("#facts")).includes("最占地方的目录"));
+  });
+
+  await check("a kind filters the file list, and picking it again clears it", async () => {
+    await openClean("normal");
+    await page.click('.segments[aria-label="选择磁盘"] button:nth-child(2)');
+    const pick = (label) => page.eval(`[...document.querySelectorAll("#kinds .kind-row")].find((r) => r.textContent.includes(${JSON.stringify(label)})).click()`);
+    await pick("视频");
+    assert.deepEqual(await texts("#largest .item-name"), ["meeting-recording-2026-10-28.mp4"]);
+    assert.ok((await text("#kinds")).includes(".mp4"));
+    assert.ok(!(await text("#kinds")).includes(".dll"), "the extensions follow");
+    await pick("视频");
+    assert.ok((await count("#largest .item")) > 5);
+  });
+
+  await check("the folders that take the most space, and places worth a look, say what they are", async () => {
+    await openClean("normal");
+    const folders = await texts("#top-folders .item-name");
+    assert.equal(folders[0], "Videos");
+    assert.ok(folders.includes("wsl"), "down to the folder that explains it");
+    const spots = await text("#spots");
+    assert.ok(spots.includes("Steam 游戏") && spots.includes("Docker 和 WSL"));
+    assert.ok(spots.includes("不要手动删除"), "and says what not to do");
+    assert.ok(spots.includes("Diskly 只告诉你"));
+    await page.click("#spots button.item");
+    assert.ok((await text("#folders .crumbs")).includes("steamapps") || (await text("#folders .crumbs")).includes("D:"));
+    assert.match(await text("#ranges .section-hint"), /个文件占了 \d+% 的空间/);
+    assert.equal(await count("#ranges .range-column"), 8);
+  });
+
+  await check("the map draws the disk in proportion, and goes in and back out", async () => {
+    await openClean("normal");
+    await page.click('.segments[aria-label="选择磁盘"] button:nth-child(2)');
+    await page.waitFor(`document.querySelector(".map-canvas .tile")`);
+    const box = await page.eval(`(() => {
+      const frame = document.querySelector(".map-frame").getBoundingClientRect();
+      const tile = (name) => { const t = [...document.querySelectorAll(".map-canvas .tile")].find((e) => e.getAttribute("aria-label").startsWith(name + "，")); const r = t.getBoundingClientRect(); return { area: r.width * r.height, inside: r.left >= frame.left - 1 && r.right <= frame.right + 1 && r.top >= frame.top - 1 && r.bottom <= frame.bottom + 1 }; };
+      return { users: tile("Users"), windows: tile("Windows") };
+    })()`);
+    assert.ok(box.users.inside && box.windows.inside);
+    const ratio = box.users.area / box.windows.area;
+    assert.ok(Math.abs(ratio - 56.2 / 33.4) < 0.08, `Users to Windows drawn at ${ratio}`);
+    const click = (name) => page.eval(`[...document.querySelectorAll(".map-canvas .tile")].find((e) => e.getAttribute("aria-label").startsWith(${JSON.stringify(name + "，")})).click()`);
+    await click("Users");
+    assert.ok((await text("#folders .crumbs")).includes("Users"));
+    assert.ok((await texts("#folders .folder-name")).includes("Alex"), "the list follows the map");
+    assert.ok(await page.eval(`[...document.querySelectorAll(".map-canvas .tile")].some((e) => e.getAttribute("aria-label").startsWith("Alex，"))`));
+    await page.eval(`[...document.querySelectorAll(".crumbs button")].find((b) => b.textContent === "C:").click()`);
+    assert.ok((await texts("#folders .folder-name")).includes("Windows"));
+    assert.equal(await count(".map-canvas"), 1);
+  });
+
+  await check("the map shows big files where they are, and a folder it cannot read is said, not drawn", async () => {
+    await openClean("normal");
+    await page.click('.segments[aria-label="选择磁盘"] button:nth-child(2)');
+    await page.waitFor(`document.querySelector(".map-canvas .tile")`);
+    assert.ok(await page.eval(`[...document.querySelectorAll(".map-canvas .tile")].some((e) => e.getAttribute("aria-label").startsWith("hiberfil.sys，文件"))`));
+    await openClean("walk-unknown");
+    await page.waitFor(`document.querySelector(".map-canvas .tile")`);
+    const labels = await page.eval(`[...document.querySelectorAll(".map-canvas .tile")].map((e) => e.getAttribute("aria-label"))`);
+    assert.ok(!labels.some((l) => l.startsWith("System Volume Information")), "an unknown size has no area");
+    assert.match(await text(".map-legend"), /未能读取，大小未知/);
+  });
+
+  await check("a file can be copied by its path, and says so", async () => {
+    await openClean("normal");
+    await page.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    await page.send("Browser.grantPermissions", { permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"] }).catch(() => {});
+    await page.realClick("#largest .item");
+    await page.waitFor(`document.querySelector(".toast.on")`);
+    assert.equal(await text(".toast"), "已复制路径");
+    const pasted = await page.eval("navigator.clipboard.readText()");
+    assert.ok(pasted.endsWith("basegame_4_gi.archive"), pasted);
+    await page.send("Emulation.setFocusEmulationEnabled", { enabled: false });
+  });
+
+  await check("the long view uses the records, with a forecast and what grew", async () => {
+    await openClean("normal");
+    const history = await text("#history");
+    assert.ok(history.includes("30 条记录"), "far more than the snapshots kept");
+    assert.ok(history.includes("最近每月多用约"));
+    assert.ok(history.includes("顶层目录变化最多"));
+    assert.ok(/\d{4} 年 \d+ 月/.test(history), "a span over a new year says the year");
+    assert.equal(await count("#history .trend"), 2, "one chart per disk, never two scales on one");
+  });
+
+  await check("it says what Diskly itself takes, against the limit", async () => {
+    await openClean("normal");
+    const shown = await text("#footprint");
+    assert.ok(shown.includes("28.0 MB") && shown.includes("上限 50.0 MB"));
+    assert.ok(shown.includes("程序") && shown.includes("快照") && shown.includes("报告"));
+    assert.ok(shown.includes("长期记录一直保留"));
+  });
+
+  await check("a disk whose earlier snapshot had to go is not called new", async () => {
+    await openClean("pruned");
+    assert.equal(await text("h1"), "这次无法比较目录变化");
+    assert.match(await text(".hero p"), /占用上限/);
+    assert.ok((await text("#history")).includes("30 条记录"), "the long view is still there");
+    assert.equal(await count(".changes"), 0);
+  });
+
+  await check("with motion on, flying into a folder ends on one map and leaves no error", async () => {
+    await page.viewport(1280, 900);
+    await page.media({ colorScheme: "dark", reducedMotion: "no-preference" });
+    await page.goto(url("normal"));
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.equal(await count("main.opening"), 0, "the opening is over");
+    await page.eval(`document.querySelector(".map-canvas .tile.big").click()`);
+    assert.equal(await count(".map-canvas"), 2, "both during the flight");
+    await new Promise((r) => setTimeout(r, 700));
+    assert.equal(await count(".map-canvas"), 1, "one after it");
+    await page.click("#open-ai");
+    await page.click("#ai-dialog .pill.quiet");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(await page.eval(`document.getElementById("ai-dialog").open`), false, "the sheet sinks away and is gone");
+    assert.deepEqual(page.consoleErrors, []);
   });
 
   await check("a change links to its folder", async () => {
@@ -208,7 +347,8 @@ try {
   });
 
   await check("no horizontal scrolling at any width, in any state", async () => {
-    for (const scenario of ["normal", "walk-unknown", "hostile", "engines", "first"]) {
+    await page.media({ reducedMotion: "reduce" });
+    for (const scenario of ["normal", "walk-unknown", "hostile", "engines", "first", "pruned"]) {
       for (const width of [1920, 1280, 900, 760, 480, 360, 320]) {
         await page.viewport(width, 800);
         await page.goto(url(scenario));
@@ -235,24 +375,32 @@ try {
     assert.ok(parseFloat(duration) < 0.01, `animation runs for ${duration}`);
   });
 
-  await check("the theme follows the system, and can be chosen", async () => {
+  await check("it opens pure black even on a light system, and the look can be chosen", async () => {
     await page.viewport(1280, 900);
-    await page.media({ colorScheme: "dark" });
+    await page.media({ colorScheme: "light" });
+    await page.goto(url("normal"));
+    await page.eval(`localStorage.removeItem("diskly-theme")`);
     await page.goto(url("normal"));
     /* light-dark() follows a change of color-scheme on the next frame, not at once. */
     const backgroundBecomes = (color) => page.waitFor(`getComputedStyle(document.documentElement).backgroundColor === "${color}"`, 1000);
+    assert.equal(await page.eval(`document.documentElement.dataset.theme`), "dark");
     await backgroundBecomes("rgb(0, 0, 0)");
     await page.click('.icon-button');
     assert.equal(await page.eval(`document.documentElement.dataset.theme`), "light");
     await backgroundBecomes("rgb(242, 242, 247)");
     await page.click('.icon-button');
-    assert.equal(await page.eval(`document.documentElement.dataset.theme`), "dark");
-    await page.click('.icon-button');
     assert.equal(await page.eval(`document.documentElement.dataset.theme ?? "system"`), "system");
+    await backgroundBecomes("rgb(242, 242, 247)");
+    await page.goto(url("normal"));
+    assert.equal(await page.eval(`document.documentElement.dataset.theme ?? "system"`), "system", "the choice is remembered");
+    await page.click('.icon-button');
+    assert.equal(await page.eval(`document.documentElement.dataset.theme`), "dark");
+    await page.eval(`localStorage.removeItem("diskly-theme")`);
   });
 
   await check("a report at the size limit stays quick", async () => {
     await openClean("big");
+    await page.waitFor(`document.querySelector(".map-canvas .tile")`);
     const ms = await page.eval(`(async () => {
       const start = performance.now();
       document.querySelector('.segments[aria-label="排序方式"] button:nth-child(2)').click();

@@ -94,6 +94,7 @@ const DisklyLib = (() => {
     different: "这两次扫描的不是同一个卷。",
     unknown: "无法确认这两次扫描的是同一个卷，所以不做比较。",
     "same-scan": "这两个时间之间，它没有新的扫描。",
+    pruned: "这块磁盘文件太多，上一次的完整快照放不进 Diskly 的占用上限，所以这次只能看总量变化。",
     order: "起点要早于终点，请重新选择。",
   };
 
@@ -225,6 +226,263 @@ const DisklyLib = (() => {
     return list.slice(0, limit);
   }
 
+  /* The folders that take the most space, none inside another: the same idea as
+     hotspots, on sizes. "C:\\Users 80 GB" says less than the folders inside it that
+     make it so. A folder that could not be read has no size to rank. */
+  function sizeHotspots(volume, b, limit) {
+    const table = volume.table;
+    const sizes = table.sizes[b];
+    if (!sizes) return [];
+    const unread = new Set(table.unread[b] || []);
+    const kids = childrenOf(table);
+    const value = (i) => (unread.has(i) ? 0 : sizes[i] ?? 0);
+    const present = (i) => kids[i].filter((c) => value(c) > 0);
+    const splittable = (i) => {
+      const inside = present(i);
+      if (!inside.length) return false;
+      return inside.reduce((sum, c) => sum + value(c), 0) >= 0.6 * value(i);
+    };
+    let list = present(0);
+    for (;;) {
+      list.sort((x, y) => value(y) - value(x));
+      const pick = list.slice(0, limit).find(splittable);
+      if (pick === undefined) break;
+      const kept = present(pick).filter((c) => value(c) >= 0.05 * value(pick));
+      if (!kept.length) break;
+      if (list.length - 1 + kept.length > Math.max(limit, 16) * 3) break;
+      list = list.filter((i) => i !== pick).concat(kept);
+    }
+    return list.slice(0, limit);
+  }
+
+  /* ---- Laying out a map of folders ---- */
+
+  /* Squarified treemap (Bruls, Huizing and van Wijk): rectangles in `w` by `h` with
+     areas in proportion to `values`, as close to square as can be. `values` must be
+     positive and biggest first. The rectangles come back in the same order. */
+  function squarify(values, x, y, w, h) {
+    const total = values.reduce((sum, v) => sum + v, 0);
+    const out = [];
+    if (!(total > 0) || w <= 0 || h <= 0) return out;
+    const scale = (w * h) / total;
+    let i = 0;
+    while (i < values.length) {
+      const short = Math.min(w, h);
+      let sum = 0;
+      let first = 0;
+      let best = Infinity;
+      let j = i;
+      while (j < values.length) {
+        const area = values[j] * scale;
+        const next = sum + area;
+        const top = first || area;
+        const worst = Math.max((short * short * top) / (next * next), (next * next) / (short * short * area));
+        if (worst > best && j > i) break;
+        best = worst;
+        sum = next;
+        first = top;
+        j += 1;
+      }
+      if (w >= h) {
+        const width = sum / h;
+        let at = y;
+        for (let k = i; k < j; k += 1) {
+          const height = (values[k] * scale) / width;
+          out.push({ x, y: at, w: width, h: height });
+          at += height;
+        }
+        x += width;
+        w -= width;
+      } else {
+        const height = sum / w;
+        let at = x;
+        for (let k = i; k < j; k += 1) {
+          const width = (values[k] * scale) / height;
+          out.push({ x: at, y, w: width, h: height });
+          at += width;
+        }
+        y += height;
+        h -= height;
+      }
+      i = j;
+    }
+    return out;
+  }
+
+  /* ---- What the space is made of ---- */
+
+  /* In the order they get their colors, which never change with the data. */
+  const KINDS = [
+    { id: "video", label: "视频" },
+    { id: "image", label: "图片" },
+    { id: "audio", label: "音频" },
+    { id: "document", label: "文档" },
+    { id: "archive", label: "压缩包和镜像" },
+    { id: "program", label: "程序和系统" },
+    { id: "code", label: "开发文件" },
+    { id: "other", label: "其他" },
+  ];
+
+  const kindLabel = (id) => KINDS.find((k) => k.id === id)?.label ?? "其他";
+  const kindIndex = (id) => Math.max(0, KINDS.findIndex((k) => k.id === id));
+
+  /* The well-known places a scan points at. Diskly never touches them: this says
+     what they are and what the system offers for them. */
+  const SPOTS = {
+    recycle: { label: "回收站", note: "清空回收站就能腾出这些空间。" },
+    downloads: { label: "下载文件夹", note: "用过的安装包和压缩包常常留在这里。" },
+    temp: { label: "临时文件", note: "可以在 Windows 设置的“存储 > 临时文件”里清理。" },
+    "app-cache": { label: "应用缓存", note: "浏览器和应用会按需重建，最好在应用自己的设置里清理。" },
+    "dev-deps": { label: "开发依赖", note: "node_modules 这类目录重新安装就能恢复，不用的项目可以清掉。" },
+    "dev-cache": { label: "开发工具缓存", note: "包管理器的下载缓存，它们通常有自带的清理命令。" },
+    containers: { label: "Docker 和 WSL", note: "虚拟磁盘只涨不缩，用 Docker 或 WSL 自带的办法压缩。" },
+    games: { label: "Steam 游戏", note: "不玩的游戏可以在 Steam 里卸载，随时能重新下载。" },
+    "update-cache": { label: "Windows 更新缓存", note: "用系统的“磁盘清理”可以移除。" },
+    "windows-old": { label: "旧版 Windows", note: "用“磁盘清理”可以移除，移除后不能再退回旧系统。" },
+    installers: { label: "安装程序缓存", note: "系统卸载和修复软件时要用，不要手动删除。" },
+    winsxs: { label: "系统组件", note: "系统运行需要它，不要手动删除。" },
+    restore: { label: "系统还原和卷影副本", note: "可以在“系统保护”里调低它的上限。" },
+    "system-files": { label: "休眠和页面文件", note: "系统文件，不要直接删除。关闭休眠可以移除 hiberfil.sys。" },
+  };
+
+  /* Where the space went on the shown disks, added together. A scan that says
+     nothing about this simply adds nothing. */
+  function mergeInsights(pairs) {
+    const files = [];
+    const kinds = new Map();
+    const extensions = new Map();
+    const ranges = new Map();
+    const spots = new Map();
+    let any = false;
+    for (const pair of pairs) {
+      if (pair.b < 0) continue;
+      const snap = pair.volume.snapshots[pair.b];
+      const insights = pair.volume.insights?.[snap.id];
+      if (!insights) continue;
+      any = true;
+      for (const f of insights.files) files.push({ ...f, letter: snap.letter, key: pair.volume.key });
+      for (const k of insights.kinds) {
+        const seen = kinds.get(k.kind) || { kind: k.kind, size: 0, count: 0 };
+        seen.size += k.size;
+        seen.count += k.count;
+        kinds.set(k.kind, seen);
+      }
+      for (const e of insights.extensions) {
+        const seen = extensions.get(e.ext) || { ext: e.ext, kind: e.kind, size: 0, count: 0 };
+        seen.size += e.size;
+        seen.count += e.count;
+        extensions.set(e.ext, seen);
+      }
+      for (const r of insights.ranges) {
+        const key = r.upper ?? "last";
+        const seen = ranges.get(key) || { upper: r.upper ?? null, size: 0, count: 0 };
+        seen.size += r.size;
+        seen.count += r.count;
+        ranges.set(key, seen);
+      }
+      for (const s of insights.spots) {
+        const seen = spots.get(s.id) || { id: s.id, size: 0, places: 0, largest: "", largestSize: 0, letter: "", key: null };
+        seen.size += s.size;
+        seen.places += s.places;
+        if (s.largest_size > seen.largestSize) {
+          Object.assign(seen, { largest: s.largest, largestSize: s.largest_size, letter: snap.letter, key: pair.volume.key });
+        }
+        spots.set(s.id, seen);
+      }
+    }
+    if (!any) return null;
+    const bySize = (x, y) => y.size - x.size;
+    return {
+      files: files.sort(bySize),
+      kinds: [...kinds.values()].sort(bySize),
+      extensions: [...extensions.values()].sort(bySize),
+      ranges: [...ranges.values()].sort((x, y) => (x.upper ?? Infinity) - (y.upper ?? Infinity)),
+      spots: [...spots.values()].sort(bySize),
+    };
+  }
+
+  function rangeLabel(lower, upper) {
+    const short = (n) => formatBytes(n).replace(/\.0 /, " ");
+    if (upper === null || upper === undefined) return `${short(lower)} 以上`;
+    if (!lower) return `${short(upper)} 以下`;
+    return `${short(lower)} 到 ${short(upper)}`;
+  }
+
+  /* The sentence that says it all about file sizes: how few files hold how much. */
+  function bigFilesLine(ranges) {
+    const total = ranges.reduce((sum, r) => sum + r.size, 0);
+    if (!total) return null;
+    const totalFiles = ranges.reduce((sum, r) => sum + r.count, 0);
+    let size = 0;
+    let count = 0;
+    let lower = null;
+    for (let i = ranges.length - 1; i > 0 && size < total * 0.5; i -= 1) {
+      size += ranges[i].size;
+      count += ranges[i].count;
+      lower = ranges[i - 1].upper;
+    }
+    if (!count || lower === null) return null;
+    const share = Math.round((size / total) * 100);
+    const fewShare = (count / totalFiles) * 100;
+    const few = fewShare < 1 ? "不到 1%" : `${Math.round(fewShare)}%`;
+    return `${formatBytes(lower).replace(/\.0 /, " ")} 以上的 ${formatCountOf(count, "个文件")}占了 ${share}% 的空间，它们只是所有文件的 ${few}。`;
+  }
+
+  /* ---- The long view ---- */
+
+  const SECONDS_PER_MONTH = 30.44 * 86400;
+
+  /* How fast a disk is filling, from recent records: a straight line through them.
+     null unless there is enough to go on and the disk really is filling. */
+  function forecast(records, now) {
+    const recent = (records || []).filter((r) => now - r.at <= 90 * 86400);
+    if (recent.length < 3) return null;
+    const span = recent[recent.length - 1].at - recent[0].at;
+    if (span < 14 * 86400) return null;
+    const used = (r) => r.total - r.free;
+    const meanT = recent.reduce((sum, r) => sum + r.at, 0) / recent.length;
+    const meanU = recent.reduce((sum, r) => sum + used(r), 0) / recent.length;
+    let top = 0;
+    let bottom = 0;
+    for (const r of recent) {
+      top += (r.at - meanT) * (used(r) - meanU);
+      bottom += (r.at - meanT) ** 2;
+    }
+    const perSecond = bottom ? top / bottom : 0;
+    const perMonth = perSecond * SECONDS_PER_MONTH;
+    if (perMonth < 64 * 1024 * 1024) return null;
+    const newest = recent[recent.length - 1];
+    const months = newest.free / perMonth;
+    return { perMonth, months, tooFar: months > 60 };
+  }
+
+  function forecastLine(letter, f) {
+    if (!f) return null;
+    const speed = `${letter}: 最近每月多用约 ${formatBytes(f.perMonth)}`;
+    if (f.tooFar) return `${speed}，短期内不会写满。`;
+    if (f.months < 1) return `${speed}，按这个速度不到一个月就会写满。`;
+    return `${speed}，按这个速度约 ${Math.round(f.months)} 个月后写满。`;
+  }
+
+  /* How the top-level folders changed since the oldest record, among scans of one
+     engine. A folder missing from either end has no known size there, so it is left
+     out rather than taken for new or gone. */
+  function longTerm(records) {
+    const list = records || [];
+    const last = list[list.length - 1];
+    if (!last || !last.top?.length) return null;
+    const first = list.find((r) => r.engine === last.engine && r.top?.length);
+    if (!first || first.id === last.id) return null;
+    const before = new Map(first.top);
+    const rows = last.top
+      .filter(([name]) => before.has(name))
+      .map(([name, size]) => ({ name, size, delta: size - before.get(name) }))
+      .filter((row) => Math.abs(row.delta) >= 1024 * 1024)
+      .sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta))
+      .slice(0, 5);
+    return rows.length ? { from: first.at, rows } : null;
+  }
+
   function pathOf(table, i) {
     const parts = [];
     for (let at = i; at > 0; at = table.parents[at]) parts.push(table.names[at]);
@@ -254,9 +512,11 @@ const DisklyLib = (() => {
       };
       const b = toId ? position(toId) : snapshots.length - 1;
       if (b < 0) return { volume, a: -1, b: -1, reason: "none" };
+      /* Nothing to compare with: because this is the start, or because it had to go. */
+      const alone = (volume.records?.length || 0) > snapshots.length && snapshots.length === 1 ? "pruned" : "first";
       if (fromId) {
         const a = position(fromId);
-        if (a < 0 || b === 0) return { volume, a: -1, b, reason: "first" };
+        if (a < 0 || b === 0) return { volume, a: -1, b, reason: alone };
         if (a === b) return { volume, a: -1, b, reason: "same-scan" };
         if (a > b) return { volume, a: -1, b, reason: "order" };
         const status = pairStatus(snapshots[a], snapshots[b]);
@@ -264,7 +524,7 @@ const DisklyLib = (() => {
       }
       const a = previousComparable(snapshots, b);
       if (a >= 0) return { volume, a, b, reason: null };
-      if (b === 0) return { volume, a: -1, b, reason: "first" };
+      if (b === 0) return { volume, a: -1, b, reason: alone };
       return { volume, a: b - 1, b, reason: pairStatus(snapshots[b - 1], snapshots[b]).reason };
     });
   }
@@ -450,6 +710,21 @@ const DisklyLib = (() => {
       out.push(`【${snap.letter}: 盘】`);
       out.push(`已用 ${formatBytes(snap.total_bytes - snap.free_bytes)}，共 ${formatBytes(snap.total_bytes)}，可用 ${formatBytes(snap.free_bytes)}。${snap.file_system || ""}。`);
       out.push(`最新扫描：${formatDate(snap.taken_at)}，${engineName(snap.engine)}，${formatCountOf(snap.files, "个文件")}，${formatCountOf(snap.dirs, "个目录")}。`);
+      const insights = volume.insights?.[snap.id];
+      if (insights) {
+        if (insights.kinds.length) {
+          out.push(`占用最多的文件类型：${insights.kinds.slice(0, 5).map((k) => `${kindLabel(k.kind)} ${formatBytes(k.size)}`).join("，")}。`);
+        }
+        if (insights.files.length) {
+          out.push("最大的文件：");
+          for (const f of insights.files.slice(0, LIST_LIMIT)) out.push(`  ${formatBytes(f.size)}  ${redact(displayPath(snap.letter, f.path))}`);
+        }
+      }
+      const big = sizeHotspots(volume, b, LIST_LIMIT).filter((i) => (volume.table.sizes[b][i] ?? 0) >= 1024 * 1024);
+      if (big.length) {
+        out.push("最占地方的目录：");
+        for (const i of big) out.push(`  ${formatBytes(volume.table.sizes[b][i])}  ${redact(displayPath(snap.letter, pathOf(volume.table, i)))}`);
+      }
       if (!volume.connected) out.push("这块盘本次未连接，以上是它最后一次扫描的情况。");
       if (!pair.cmp) {
         const once = volume.connected ? "这是第一次扫描，还没有可比较的历史。" : "它只扫描过一次，没有可比较的历史。";
@@ -464,7 +739,7 @@ const DisklyLib = (() => {
       const shrank = changeLines(pair, -1, redact);
       out.push("变大最多的目录：");
       out.push(...(grew.length ? grew.map((l) => `  ${l.text}`) : ["  （没有超过 1 MB 的增长）"]));
-      out.push("变小最多的目录：");
+      out.push("释放最多的目录：");
       out.push(...(shrank.length ? shrank.map((l) => `  ${l.text}`) : ["  （没有超过 1 MB 的减少）"]));
 
       const files = volume.file_changes[cmp.snapB.id];
@@ -490,12 +765,18 @@ const DisklyLib = (() => {
   }
 
   return {
+    KINDS,
+    SPOTS,
     STATE,
     accountNames,
+    bigFilesLine,
     buildPrompt,
+    childrenOf,
     compare,
     displayPath,
     engineName,
+    forecast,
+    forecastLine,
     formatAgo,
     formatBytes,
     formatCount,
@@ -506,12 +787,19 @@ const DisklyLib = (() => {
     formatSeconds,
     headline,
     hotspots,
+    kindIndex,
+    kindLabel,
+    longTerm,
     makeRedactor,
+    mergeInsights,
     pairStatus,
     pathOf,
     previousComparable,
+    rangeLabel,
     reasonText,
     resolvePairs,
+    sizeHotspots,
+    squarify,
     withComparisons,
   };
 })();

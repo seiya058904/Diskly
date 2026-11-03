@@ -13,6 +13,9 @@ try {
     await page.media({ colorScheme: theme, reducedMotion: "reduce" });
     await page.goto(fileUrl(join(pages, `${scenario}.html`)));
     await new Promise((resolve) => setTimeout(resolve, 200));
+    /* A full-page picture never scrolls, so what waits for scrolling must not wait. */
+    await page.eval(`document.querySelectorAll(".far").forEach((e) => { e.style.contentVisibility = "visible"; })`);
+    await new Promise((resolve) => setTimeout(resolve, 200));
     await page.screenshot(join(out, `${scenario}-${theme}-${width}.png`), { fullPage: true });
     const errors = page.consoleErrors.length ? ` ERRORS: ${JSON.stringify(page.consoleErrors)}` : "";
     const overflow = await page.eval("document.documentElement.scrollWidth - document.documentElement.clientWidth");
