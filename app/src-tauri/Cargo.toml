@@ -8,6 +8,11 @@ repository = "https://github.com/seiya058904/Diskly"
 rust-version = "1.82"
 description = "A minimal Windows tool that shows what changed on your disks since last time."
 
+[features]
+# So a plain cargo build gives the same app as a bundled one.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

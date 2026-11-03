@@ -155,7 +155,11 @@ fn main() {
         std::process::exit(helper::serve(&args[1..]));
     }
 
-    let root = Store::default_root().unwrap_or_else(|| PathBuf::from("Diskly-data"));
+    // Tests set this so their scans stay out of the real history.
+    let root = std::env::var_os("DISKLY_DATA_DIR")
+        .map(PathBuf::from)
+        .or_else(Store::default_root)
+        .unwrap_or_else(|| PathBuf::from("Diskly-data"));
     let store = match Store::open(root) {
         Ok(store) => store,
         Err(e) => {

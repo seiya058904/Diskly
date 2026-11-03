@@ -378,6 +378,8 @@ pub fn run(
     if stored > 0 {
         let connected = fixed_volumes();
         match write_report(&store, &mut run, &connected) {
+            // Tests set this so a run of them does not fill the browser with tabs.
+            Ok(_) if std::env::var_os("DISKLY_NO_BROWSER").is_some() => {}
             Ok(path) if !cancelled => {
                 if let Err(e) = open_file(&path) {
                     error = Some(format!("报告已保存，但无法打开浏览器：{e}"));

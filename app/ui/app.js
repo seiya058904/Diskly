@@ -96,9 +96,9 @@ function ago(unix) {
 }
 
 function dateTime(unix) {
-  return new Date(unix * 1000).toLocaleString("zh-CN", {
-    year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit",
-  });
+  const d = new Date(unix * 1000);
+  const pad = (x) => String(x).padStart(2, "0");
+  return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function applyTheme() {
@@ -335,13 +335,13 @@ function backButton() {
 }
 
 function runDetail(run) {
-  const parts = run.volumes.map((v) => {
-    const name = `${v.letter}:`;
-    if (v.status === "cancelled") return `${name} 已取消`;
-    if (v.status === "failed") return `${name} 失败`;
-    return name;
-  });
-  return `${parts.join("、")}，用时 ${seconds(run.seconds)}`;
+  const of = (status) => run.volumes.filter((v) => v.status === status).map((v) => `${v.letter}:`).join("、");
+  const parts = [];
+  if (of("complete")) parts.push(`已扫描 ${of("complete")}`);
+  if (of("cancelled")) parts.push(`${of("cancelled")} 已取消`);
+  if (of("failed")) parts.push(`${of("failed")} 失败`);
+  parts.push(`用时 ${seconds(run.seconds)}`);
+  return parts.join("，");
 }
 
 async function renderHistory() {
