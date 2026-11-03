@@ -75,6 +75,10 @@ function count(n) {
   return String(n);
 }
 
+function files(n) {
+  return `${count(n)}${n >= 10000 ? "" : " "}个文件`;
+}
+
 function seconds(s) {
   if (s < 10) return `${s.toFixed(1)} 秒`;
   if (s < 60) return `${Math.round(s)} 秒`;
@@ -131,12 +135,12 @@ function diskRow(volume, track) {
     } else if (track.state === "scanning") {
       fill.style.width = `${Math.round(track.estimate * 100)}%`;
       note = el("div", { class: "disk-note" },
-        el("span", { text: `约 ${Math.round(track.estimate * 100)}%，${count(track.files)} 个文件，${bytes(track.bytes)}` }),
+        el("span", { text: `约 ${Math.round(track.estimate * 100)}%，${files(track.files)}，${bytes(track.bytes)}` }),
         el("span", { text: seconds(track.seconds) }));
     } else {
       fill.style.width = "100%";
       note = el("div", { class: "disk-note" },
-        el("span", { text: `${count(track.files)} 个文件，${bytes(track.bytes)}` }),
+        el("span", { text: `${files(track.files)}，${bytes(track.bytes)}` }),
         el("span", { text: seconds(track.seconds) }));
     }
   } else {
