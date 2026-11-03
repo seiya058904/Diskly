@@ -1,0 +1,22 @@
+Diskly
+Copyright (c) 2026 seiya058904
+
+Diskly is built on Diskghost, by kingchenc
+https://github.com/kingchenc/diskghost
+Copyright (c) 2026 kingchenc
+MIT License (see LICENSE)
+
+This repository is a clone of Diskghost at commit 0034d79, with its history
+kept and a remote named "upstream" for later updates.
+
+What comes from Diskghost:
+
+- crates/diskghost-core: the scanning, MFT and snapshot engine. Changed in one
+  place, crates/diskghost-core/src/mft.rs, to fix folders counted twice. See
+  docs/benchmarks/2026-11-core-acceptance.md for the evidence.
+
+Diskghost's GUI, command line tool, duplicate finder and delete features are not
+part of Diskly. The core library still contains its delete functions, because it
+is kept as it is. Diskly does not call them, and a test enforces that.
+
+Everything else in this repository was written for Diskly.

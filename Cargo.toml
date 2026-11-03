@@ -1,6 +1,5 @@
 [workspace]
-members = ["crates/diskghost-core", "crates/diskghost-cli"]
-exclude = ["gui"]
+members = ["crates/diskghost-core"]
 resolver = "2"
 
 [workspace.package]
