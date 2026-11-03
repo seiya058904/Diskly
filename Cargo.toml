@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/diskghost-core"]
+members = ["crates/diskghost-core", "crates/diskly-core"]
 resolver = "2"
 
 [workspace.package]
