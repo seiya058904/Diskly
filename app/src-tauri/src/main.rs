@@ -7,6 +7,7 @@ mod helper;
 mod runner;
 mod shell;
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -79,7 +80,24 @@ fn start_scan(
         .and_then(|w| w.hwnd().ok())
         .map_or(0isize, |h| h.0 as isize);
     std::thread::spawn(move || {
-        runner::run(store, mode, control, on_event, owner as _);
+        let events = on_event.clone();
+        let keeper = control.clone();
+        let ran = catch_unwind(AssertUnwindSafe(|| {
+            runner::run(store, mode, control, on_event, owner as _);
+        }));
+        // The window must not stay on "scanning" forever if something went wrong.
+        if ran.is_err() {
+            keeper.running.store(false, Ordering::Relaxed);
+            let _ = events.send(ScanEvent::Finished {
+                scan_id: String::new(),
+                seconds: 0.0,
+                cancelled: false,
+                stored: 0,
+                declined: false,
+                error: Some("扫描时发生内部错误，旧的历史没有变化。".to_string()),
+                run: None,
+            });
+        }
     });
     Ok(())
 }

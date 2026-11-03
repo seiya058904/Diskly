@@ -200,6 +200,7 @@ fn scan_with_helper(
     tracks: &[Arc<Track>],
     control: &Control,
 ) -> Vec<Option<ScanResult>> {
+    helper.keep_alive();
     let mut last_alive = Instant::now();
     let mut cancel_sent = false;
     loop {
@@ -276,6 +277,7 @@ fn scan_fast(
         Ok(helper) => {
             set_phase(phase, "scanning");
             let results = scan_with_helper(&helper, tracks, control);
+            helper.finish();
             store.clear_helper_files(helper.token());
             // Whatever the helper left undone is walked, unless the user stopped it.
             let cancelled = control.cancel.load(Ordering::Relaxed);

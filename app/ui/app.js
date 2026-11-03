@@ -203,7 +203,7 @@ function renderHome() {
 
   const nav = el("div", { class: "nav-row" });
   if (!state.scan) {
-    if (state.outcome && state.outcome.scanId && !state.outcome.error) {
+    if (state.outcome && state.outcome.scanId && state.outcome.stored && !state.outcome.error) {
       nav.append(el("button", { type: "button", class: "text-button accent", text: "打开报告", onclick: () => openReport(state.outcome.scanId) }));
     }
     nav.append(

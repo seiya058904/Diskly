@@ -6,22 +6,36 @@
 //! scan. Idea and file protocol are adapted from Diskghost's helper
 //! (`gui/src-tauri/src/helper.rs`, MIT, Copyright (c) 2026 kingchenc).
 //!
-//! An elevated process must not trust a folder that normal programs can write
-//! to. So, unlike that helper, this one parses nothing from it. What to do comes
-//! from the elevated command line, which normal programs cannot change. From the
-//! folder it only notices whether two marker files exist and how old one is. It
-//! writes under names holding a random token that normal programs cannot read,
-//! it takes only the roots of fixed volumes, and it exits when the scan is done.
+//! An elevated process must not be steered by programs without its rights, which
+//! can write to the user's data folder and can read file names there. So, unlike
+//! that helper, this one:
 //!
-//! | file                 | from   | content                                   |
-//! |----------------------|--------|-------------------------------------------|
-//! | `<t>-alive.json`     | both   | helper creates, app touches; stale = stop |
-//! | `<t>-cancel.json`    | app    | exists = stop                             |
-//! | `<t>-beat.json`      | helper | touched while it runs; stale = it died    |
-//! | `<t>-progress.json`  | helper | counts per volume                         |
-//! | `<t>-<L>.dgs`        | helper | the scan of volume L as a snapshot        |
-//! | `<t>-<L>.json`       | helper | how that scan went                        |
-//! | `<t>-done.json`      | helper | all volumes are finished                  |
+//! - takes what to do from the elevated command line, which they cannot change,
+//!   and only the roots of fixed volumes;
+//! - writes only into a private folder it makes for this scan, which administrators
+//!   can write to and others only read, so no link can be planted in it;
+//! - holds that folder open, so it and the folders above it cannot be swapped;
+//! - only looks at whether marker files exist and how old they are, never opening
+//!   anything in the folder others can write to;
+//! - exits when the scan is done.
+//!
+//! In the helper folder, from the app:
+//!
+//! | file                 | content                                         |
+//! |----------------------|-------------------------------------------------|
+//! | `<t>-alive.json`     | touched every few seconds; stale = stop         |
+//! | `<t>-cancel.json`    | exists = stop                                   |
+//! | `<t>-collected.json` | exists = results were read, clean up            |
+//!
+//! In the private folder `<t>`, from the helper:
+//!
+//! | file            | content                                  |
+//! |-----------------|------------------------------------------|
+//! | `beat.json`     | touched while it runs; stale = it died   |
+//! | `progress.json` | counts per volume                        |
+//! | `<L>.dgs`       | the scan of volume L as a snapshot       |
+//! | `<L>.json`      | how that scan went                       |
+//! | `done.json`     | all volumes are finished                 |
 
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
@@ -29,15 +43,25 @@ use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use diskghost_core::{Progress, Snapshot};
 use diskly_core::scan::{run_per_disk, scan_root, ScanSummary};
-use diskly_core::store::write_atomic;
+use diskly_core::store::{remove_session_files, remove_session_folder, write_atomic};
 use diskly_core::volumes::{fixed_volumes, Volume};
 use serde::{Deserialize, Serialize};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_CANCELLED, HANDLE, HWND, WAIT_TIMEOUT,
+    CloseHandle, GetLastError, LocalFree, ERROR_CANCELLED, HANDLE, HWND, INVALID_HANDLE_VALUE,
+    WAIT_TIMEOUT,
+};
+use windows_sys::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
+use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateDirectoryW, CreateFileW, GetFinalPathNameByHandleW, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
@@ -92,6 +116,97 @@ fn is_helper_folder(dir: &Path) -> bool {
 
 // ------------------------------- helper side -------------------------------
 
+/// A folder for one scan: administrators and the system may write to it, and
+/// anyone signed in may read. Held open for as long as this value lives, which
+/// stops it and the folders above it from being renamed.
+struct PrivateFolder {
+    handle: HANDLE,
+}
+
+impl PrivateFolder {
+    /// Make `<helper folder>\<token>`. Fails if it exists already.
+    fn create(path: &Path) -> Result<PrivateFolder, String> {
+        const RULES: &str = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FRFX;;;AU)";
+        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        let rules = wide(OsStr::new(RULES));
+        // SAFETY: `rules` is NUL-terminated; `descriptor` receives an allocation
+        // that is freed below.
+        let converted = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                rules.as_ptr(),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                std::ptr::null_mut(),
+            )
+        };
+        if converted == 0 {
+            return Err("cannot prepare the folder's permissions".to_string());
+        }
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor,
+            bInheritHandle: 0,
+        };
+        let name = wide(path.as_os_str());
+        // SAFETY: `name` is NUL-terminated; `attributes` and `descriptor` are valid here.
+        let made = unsafe { CreateDirectoryW(name.as_ptr(), &attributes) };
+        // SAFETY: `descriptor` came from the conversion above and is freed once.
+        unsafe { LocalFree(descriptor) };
+        if made == 0 {
+            return Err("cannot create the folder".to_string());
+        }
+        // No FILE_SHARE_DELETE: while this handle is open, nothing can move it.
+        // SAFETY: `name` is NUL-terminated; the handle is checked and owned below.
+        let handle = unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                std::ptr::null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err("cannot open the folder".to_string());
+        }
+        let folder = PrivateFolder { handle };
+        // The folders above may have been swapped before it was made and locked.
+        let token = path.file_name().unwrap_or_default().to_string_lossy();
+        let wanted = format!(r"\diskly\data\helper\{token}").to_lowercase();
+        if !folder.final_path()?.to_lowercase().ends_with(&wanted) {
+            return Err("the folder is not where it should be".to_string());
+        }
+        Ok(folder)
+    }
+
+    /// Where the folder really is, with every link resolved.
+    fn final_path(&self) -> Result<String, String> {
+        let mut buffer = vec![0u16; 4096];
+        // SAFETY: `handle` is open, and `buffer` holds the length passed.
+        let length = unsafe {
+            GetFinalPathNameByHandleW(
+                self.handle,
+                buffer.as_mut_ptr(),
+                buffer.len() as u32,
+                FILE_NAME_NORMALIZED,
+            )
+        } as usize;
+        if length == 0 || length >= buffer.len() {
+            return Err("cannot tell where the folder is".to_string());
+        }
+        Ok(String::from_utf16_lossy(&buffer[..length]))
+    }
+}
+
+impl Drop for PrivateFolder {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from CreateFileW and is closed once.
+        unsafe { CloseHandle(self.handle) };
+    }
+}
+
 /// Run as the helper: `--mft-helper <folder> <token> <letters>`.
 pub fn serve(args: &[String]) -> i32 {
     let [dir, token, letters] = args else {
@@ -109,10 +224,20 @@ pub fn serve(args: &[String]) -> i32 {
     if volumes.is_empty() || !letters.chars().all(|c| c.is_ascii_uppercase()) {
         return 2;
     }
-    let file = |what: &str| dir.join(format!("{token}-{what}"));
-    // Written here, not by the app: the user may take any time to answer the
-    // prompt, and that must not look like the app having gone away.
-    touch(&file("alive.json"));
+    let session = dir.join(token);
+    let Ok(folder) = PrivateFolder::create(&session) else {
+        return 3;
+    };
+    let out = |what: &str| session.join(what);
+    let marker = |what: &str| dir.join(format!("{token}-{what}.json"));
+
+    // The app starts touching its marker once the prompt has been answered, so
+    // the time the user took does not count, only how long it stays silent now.
+    let started = Instant::now();
+    let app_gone = || match age(&marker("alive")) {
+        Some(age) => age > APP_TIMEOUT,
+        None => started.elapsed() > APP_TIMEOUT,
+    };
 
     let jobs: Vec<(Volume, Progress, Arc<AtomicU8>)> = volumes
         .into_iter()
@@ -122,14 +247,8 @@ pub fn serve(args: &[String]) -> i32 {
 
     std::thread::scope(|scope| {
         scope.spawn(|| {
-            let (beat, alive, cancel, progress) = (
-                file("beat.json"),
-                file("alive.json"),
-                file("cancel.json"),
-                file("progress.json"),
-            );
             while !finished.load(Ordering::Relaxed) {
-                touch(&beat);
+                touch(&out("beat.json"));
                 let counts: Vec<HelperCount> = jobs
                     .iter()
                     .map(|(v, p, s)| HelperCount {
@@ -140,10 +259,9 @@ pub fn serve(args: &[String]) -> i32 {
                     })
                     .collect();
                 if let Ok(bytes) = serde_json::to_vec(&counts) {
-                    let _ = write_atomic(&progress, &bytes);
+                    let _ = write_atomic(&out("progress.json"), &bytes);
                 }
-                let app_gone = age(&alive).is_none_or(|a| a > APP_TIMEOUT);
-                if app_gone || cancel.exists() {
+                if app_gone() || marker("cancel").exists() {
                     for (_, p, _) in &jobs {
                         p.cancel();
                     }
@@ -159,8 +277,8 @@ pub fn serve(args: &[String]) -> i32 {
                 state.store(SCANNING, Ordering::Relaxed);
                 let (summary, snapshot) = scan_root(&v.root, true, progress);
                 write_result(
-                    &file(&format!("{}.dgs", v.letter)),
-                    &file(&format!("{}.json", v.letter)),
+                    &out(&format!("{}.dgs", v.letter)),
+                    &out(&format!("{}.json", v.letter)),
                     &summary,
                     snapshot.as_ref(),
                 );
@@ -169,8 +287,8 @@ pub fn serve(args: &[String]) -> i32 {
             |(v, _, state)| {
                 let summary = ScanSummary::failed("扫描时发生内部错误", 0.0);
                 write_result(
-                    &file(&format!("{}.dgs", v.letter)),
-                    &file(&format!("{}.json", v.letter)),
+                    &out(&format!("{}.dgs", v.letter)),
+                    &out(&format!("{}.json", v.letter)),
                     &summary,
                     None,
                 );
@@ -179,7 +297,17 @@ pub fn serve(args: &[String]) -> i32 {
         );
         finished.store(true, Ordering::Relaxed);
     });
-    touch(&file("done.json"));
+    touch(&out("done.json"));
+
+    // Only this process can clean its folder, once the app has read the results.
+    while !marker("collected").exists() && !app_gone() {
+        std::thread::sleep(Duration::from_millis(60));
+    }
+    remove_session_files(&session);
+    // Files go while the folder is locked. Removing the folder needs it unlocked,
+    // and removing a folder cannot follow a link.
+    drop(folder);
+    remove_session_folder(&session);
     0
 }
 
@@ -278,29 +406,44 @@ impl Helper {
         })
     }
 
-    fn file(&self, what: &str) -> PathBuf {
-        self.dir.join(format!("{}-{what}", self.token))
+    /// A file in the helper's private folder, which this process can only read.
+    fn result_file(&self, what: &str) -> PathBuf {
+        self.dir.join(&self.token).join(what)
+    }
+
+    /// A marker this process writes for the helper to notice.
+    fn marker(&self, what: &str) -> PathBuf {
+        self.dir.join(format!("{}-{what}.json", self.token))
     }
 
     /// Tell the helper the app is still here.
     pub fn keep_alive(&self) {
-        touch(&self.file("alive.json"));
+        touch(&self.marker("alive"));
     }
 
     pub fn cancel(&self) {
-        touch(&self.file("cancel.json"));
+        touch(&self.marker("cancel"));
+    }
+
+    /// Say the results have been read, and give the helper a moment to clean up.
+    pub fn finish(&self) {
+        touch(&self.marker("collected"));
+        if !self.process.is_null() {
+            // SAFETY: `process` is a handle this struct owns.
+            unsafe { WaitForSingleObject(self.process, 5000) };
+        }
     }
 
     /// The counts so far, if there are any yet.
     pub fn counts(&self) -> Vec<HelperCount> {
-        std::fs::read(self.file("progress.json"))
+        std::fs::read(self.result_file("progress.json"))
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default()
     }
 
     pub fn finished(&self) -> bool {
-        self.file("done.json").exists()
+        self.result_file("done.json").exists()
     }
 
     /// The helper's process has exited, or has not been heard from for too long.
@@ -308,17 +451,18 @@ impl Helper {
         // SAFETY: `process` is a handle this struct owns, or null.
         let exited = !self.process.is_null()
             && unsafe { WaitForSingleObject(self.process, 0) } != WAIT_TIMEOUT;
-        let silent = age(&self.file("beat.json")).is_some_and(|a| a > HELPER_TIMEOUT);
+        let silent = age(&self.result_file("beat.json")).is_some_and(|a| a > HELPER_TIMEOUT);
         exited || silent
     }
 
     /// The result for one volume. The snapshot was written by the helper and
     /// is read like any other file: a bad one is an error for that volume.
     pub fn result(&self, letter: char) -> Option<(ScanSummary, Option<Snapshot>)> {
-        let summary: ScanSummary =
-            serde_json::from_slice(&std::fs::read(self.file(&format!("{letter}.json"))).ok()?)
-                .ok()?;
-        let path = self.file(&format!("{letter}.dgs"));
+        let summary: ScanSummary = serde_json::from_slice(
+            &std::fs::read(self.result_file(&format!("{letter}.json"))).ok()?,
+        )
+        .ok()?;
+        let path = self.result_file(&format!("{letter}.dgs"));
         if !path.exists() {
             return Some((summary, None));
         }
@@ -356,6 +500,44 @@ mod tests {
         assert_ne!(token, random_token());
         assert!(!is_token("..\\..\\windows"));
         assert!(!is_token(&"g".repeat(32)));
+    }
+
+    #[test]
+    fn a_private_folder_cannot_be_written_to_or_moved_by_normal_programs() {
+        let base = std::env::temp_dir().join(format!("diskly-private-{}", std::process::id()));
+        let helper = base.join("Diskly").join("Data").join("helper");
+        std::fs::create_dir_all(&helper).unwrap();
+        let session = helper.join(random_token());
+
+        let folder = PrivateFolder::create(&session).unwrap();
+        assert!(session.is_dir());
+        assert!(
+            PrivateFolder::create(&session).is_err(),
+            "a folder that exists might be someone else's"
+        );
+        assert!(
+            std::fs::rename(&helper, base.join("moved")).is_err(),
+            "the folders above must stay put"
+        );
+        if !diskly_core::scan::is_elevated() {
+            assert!(
+                std::fs::write(session.join("planted.json"), b"x").is_err(),
+                "a normal program must not be able to plant anything"
+            );
+        }
+        drop(folder);
+        std::fs::remove_dir(&session).unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_private_folder_must_be_in_the_helper_folder() {
+        let base = std::env::temp_dir().join(format!("diskly-elsewhere-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let session = base.join(random_token());
+        assert!(PrivateFolder::create(&session).is_err());
+        let _ = std::fs::remove_dir(&session);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

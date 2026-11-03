@@ -22,7 +22,7 @@
 
 ## Get it
 
-Download from [Releases](https://github.com/seiya058904/Diskly/releases). Windows 10 or 11, 64-bit.
+Download from [Releases](https://github.com/seiya058904/Diskly/releases). For 64-bit Windows 11, where it has been tested. It should also run on Windows 10, without the frosted window background.
 
 - **`Diskly-x.y.z-setup.exe`** installs for your user only, with no administrator rights.
 - **`Diskly-x.y.z-portable.exe`** runs as it is. It needs Microsoft Edge WebView2, which Windows 11 includes.

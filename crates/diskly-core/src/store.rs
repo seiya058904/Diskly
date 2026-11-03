@@ -134,6 +134,37 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
     write_atomic(path, &bytes)
 }
 
+/// The one place Diskly removes a file. Refuses anything that is not a plain file.
+fn remove_plain_file(path: &Path) -> io::Result<()> {
+    if !fs::symlink_metadata(path)?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a plain file",
+        ));
+    }
+    fs::remove_file(path)
+}
+
+/// Used by the elevated helper: remove what it wrote into its private folder, by
+/// kind of file, directly inside that folder. Call while the folder is locked.
+pub fn remove_session_files(session: &Path) {
+    for entry in fs::read_dir(session).into_iter().flatten().flatten() {
+        let path = entry.path();
+        let ours = path
+            .extension()
+            .is_some_and(|e| e == "dgs" || e == "json" || e == "tmp");
+        if ours {
+            let _ = remove_plain_file(&path);
+        }
+    }
+}
+
+/// Used by the elevated helper: remove its emptied private folder. This removes
+/// one empty folder, and removes a link rather than following it.
+pub fn remove_session_folder(session: &Path) {
+    let _ = fs::remove_dir(session);
+}
+
 /// The data folder.
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -276,22 +307,15 @@ impl Store {
         self.root.join("helper")
     }
 
-    /// Remove the files a helper session may have left, by their exact names.
+    /// Remove the markers of a helper session, by their exact names. The helper
+    /// cleans its own folder, which this process may only read.
     pub fn clear_helper_files(&self, token: &str) {
         if !valid_id(token) {
             return;
         }
         let dir = self.helper_dir();
-        let mut names: Vec<String> = ["alive", "cancel", "beat", "progress", "done"]
-            .iter()
-            .map(|what| format!("{token}-{what}.json"))
-            .collect();
-        for letter in 'A'..='Z' {
-            names.push(format!("{token}-{letter}.json"));
-            names.push(format!("{token}-{letter}.dgs"));
-        }
-        for name in names {
-            let path = dir.join(name);
+        for what in ["alive", "cancel", "collected"] {
+            let path = dir.join(format!("{token}-{what}.json"));
             if path.exists() {
                 let _ = self.remove_own_file(&path);
             }
@@ -335,11 +359,7 @@ impl Store {
         if !in_history && !in_helper {
             return refuse("outside the folders of this store");
         }
-        let info = fs::symlink_metadata(path)?;
-        if !info.is_file() {
-            return refuse("not a plain file");
-        }
-        fs::remove_file(path)
+        remove_plain_file(path)
     }
 
     /// Keep the newest `keep` snapshots of a volume. The marker goes first, so

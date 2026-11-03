@@ -69,7 +69,13 @@ fn only_the_store_removes_files_and_it_checks_each_one() {
                 1,
                 "one guarded call"
             );
-            assert!(code.contains("fn remove_own_file"));
+            assert!(code.contains("fn remove_plain_file"));
+            assert_eq!(
+                code.matches("fs::remove_dir(").count(),
+                1,
+                "one empty folder"
+            );
+            assert!(!code.contains("remove_dir_all"));
         } else {
             assert!(
                 !code.contains("remove_file"),
@@ -77,7 +83,10 @@ fn only_the_store_removes_files_and_it_checks_each_one() {
                 file.display()
             );
         }
-        for banned in ["remove_dir", "DeleteFile", "MoveFileEx", "SHFileOperation"] {
+        if !file.ends_with("store.rs") {
+            assert!(!code.contains("fs::remove_dir"), "in {}", file.display());
+        }
+        for banned in ["DeleteFile", "MoveFileEx", "SHFileOperation"] {
             assert!(!code.contains(banned), "{banned} in {}", file.display());
         }
     }

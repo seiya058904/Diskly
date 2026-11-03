@@ -201,13 +201,15 @@ export async function launchBrowser(tempRoot) {
     "--disable-extensions",
     "--disable-background-networking",
     "--disable-sync",
+    "--disable-gpu",
     "--window-size=1280,900",
     "about:blank",
   ], { stdio: "ignore" });
   const portFile = join(profile, "DevToolsActivePort");
   const start = Date.now();
   while (!existsSync(portFile) || !readFileSync(portFile, "utf8").includes("\n")) {
-    if (Date.now() - start > 20000) throw new Error("the browser did not start");
+    /* A first start on a fresh CI machine can take a while. */
+    if (Date.now() - start > 60000) throw new Error("the browser did not start");
     await sleep(80);
   }
   const port = Number(readFileSync(portFile, "utf8").split("\n")[0]);

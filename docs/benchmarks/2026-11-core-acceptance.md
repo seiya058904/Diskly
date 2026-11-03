@@ -154,10 +154,10 @@ Release build of Diskly 0.1.0, same machine, after the app was built. By then C:
 
 | Whole scan, C: and D: | Runs | Seconds |
 |---|---:|---:|
-| Fast (MFT, through the elevated helper) | 4 | 1.36, 1.42, 1.43, 2.48 |
-| Normal (walk, 4 threads per disk) | 3 | 6.75, 7.20, 7.72 |
+| Fast (MFT, through the elevated helper) | 6 | 1.35, 1.36, 1.42, 1.43, 2.36, 2.48 |
+| Normal (walk, 4 threads per disk) | 5 | 6.09, 6.75, 6.76, 7.20, 7.72 |
 
-The 2.48 s fast run came after other work had pushed the MFT out of the cache.
+The two slower fast runs were each the first in a while, so the table was probably no longer fully cached.
 
 Real Windows prompts, read from the run records:
 

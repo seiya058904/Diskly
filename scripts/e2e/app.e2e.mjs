@@ -456,7 +456,7 @@ try {
 } finally {
   page?.close();
   app?.kill();
-  if (phase === "uac-accept" || phase === "uac-decline") removeKnownFiles();
+  removeKnownFiles();
 }
 
 const failed = results.filter((r) => r.startsWith("FAIL")).length;
