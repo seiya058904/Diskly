@@ -212,7 +212,7 @@ test("a disk that fills steadily gets a forecast, and one that does not gets non
 });
 
 test("the long-term view only compares what both ends know, with one engine", () => {
-  const record = (id, engine, top) => ({ id, at: Number(id), engine, total: 1, free: 0, top });
+  const record = (id, engine, top) => ({ id, at: Number(id), engine, total: 1, free: 0, top, serial: 7, unread_top: [] });
   const MB = 1024 ** 2;
   const list = [
     record("1", "walk", [["Users", 1 * MB]]),
@@ -226,6 +226,36 @@ test("the long-term view only compares what both ends know, with one engine", ()
   assert.equal(lib.longTerm([record("9", "mft", [["a", 1]])]), null, "one scan");
   assert.equal(lib.longTerm([]), null);
   assert.equal(lib.longTerm(undefined), null);
+});
+
+test("the long-term view never turns the unknown or another format into a change", () => {
+  const GiB = 1024 ** 3;
+  const record = (id, top, over) => ({ id, at: Number(id), engine: "walk", total: 1, free: 0, top, serial: 7, unread_top: [], ...over });
+  const rows = (list) => lib.longTerm(list)?.rows.map((r) => [r.name, r.delta]) ?? null;
+  const first = record("1", [["Users", 60 * GiB], ["Games", 10 * GiB]]);
+
+  assert.deepEqual(rows([first, record("2", [["Users", 70 * GiB], ["Games", 10 * GiB]])]), [["Users", 10 * GiB]], "plain growth");
+
+  const unreadNow = record("2", [["Users", 10 * GiB], ["Games", 12 * GiB]], { unread_top: ["Users"] });
+  assert.deepEqual(rows([first, unreadNow]), [["Games", 2 * GiB]], "50 GiB that could not be read is not 50 GiB less");
+  assert.equal(rows([first, record("2", [["Users", 10 * GiB]], { unread_top: ["users"] })]), null, "nothing known, in any case");
+
+  const unreadThen = record("1", [["Users", 10 * GiB], ["Games", 10 * GiB]], { unread_top: ["Users"] });
+  assert.deepEqual(rows([unreadThen, record("2", [["Users", 60 * GiB], ["Games", 12 * GiB]])]), [["Games", 2 * GiB]], "nor is reading it again 50 GiB more");
+
+  const middle = record("2", [], { unread_top: null });
+  assert.deepEqual(rows([first, middle, record("3", [["Users", 61 * GiB], ["Games", 10 * GiB]])]), [["Users", 1 * GiB]], "readable again compares with what was known");
+
+  const formatted = record("2", [["Users", 5 * GiB]], { serial: 8 });
+  assert.equal(rows([first, formatted]), null, "the same GUID with another serial holds other folders");
+  assert.deepEqual(rows([first, formatted, record("3", [["Users", 6 * GiB]], { serial: 8 })]), [["Users", 1 * GiB]], "after a format it starts over");
+
+  const old = (id, top) => ({ id, at: Number(id), engine: "walk", total: 1, free: 0, top });
+  assert.equal(rows([old("1", [["Users", 60 * GiB]]), old("2", [["Users", 10 * GiB]])]), null, "old records know neither");
+  assert.equal(rows([old("1", [["Users", 60 * GiB]]), record("2", [["Users", 10 * GiB]])]), null, "an old start knows nothing");
+  assert.equal(rows([first, old("2", [["Users", 10 * GiB]])]), null, "an old end knows nothing");
+  assert.equal(rows([first, record("2", [["Users", 70 * GiB]], { serial: null })]), null, "unknown serial is not the same disk");
+  assert.deepEqual(rows([old("1", [["Users", 60 * GiB]]), first, record("3", [["Users", 61 * GiB]])]), [["Users", 1 * GiB]], "old records are skipped, not fatal");
 });
 
 test("a disk whose earlier snapshots had to go says so, instead of calling it new", () => {

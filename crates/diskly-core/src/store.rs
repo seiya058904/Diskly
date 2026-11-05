@@ -130,6 +130,45 @@ pub struct ScanRecord {
     /// The top-level folders, for long-term comparison between scans of one engine.
     #[serde(default)]
     pub top: Vec<(String, u64)>,
+    /// A format changes it, and the folders of another format are other folders.
+    /// Missing from records made before this was kept.
+    #[serde(default)]
+    pub serial: Option<u32>,
+    /// Those of `top` with something inside that could not be read, so that their
+    /// size is unknown. `None` in records made before this was kept.
+    #[serde(default)]
+    pub unread_top: Option<Vec<String>>,
+}
+
+impl ScanRecord {
+    /// Its top-level folders can be compared over the long term at all.
+    pub fn knows_its_folders(&self) -> bool {
+        !self.top.is_empty() && self.serial.is_some() && self.unread_top.is_some()
+    }
+}
+
+/// The record the newest one is compared with over the long term: the oldest of
+/// the same file system and engine. `report/lib.js` picks the same one.
+pub fn long_term_base(records: &[ScanRecord]) -> Option<usize> {
+    let newest = records.last().filter(|r| r.knows_its_folders())?;
+    records.iter().position(|r| {
+        r.knows_its_folders() && r.engine == newest.engine && r.serial == newest.serial
+    })
+}
+
+/// Which of `top` hold a folder that could not be read.
+fn unread_among(top: &[(String, u64)], unread_dirs: &[String]) -> Vec<String> {
+    top.iter()
+        .map(|(name, _)| name)
+        .filter(|name| {
+            unread_dirs.iter().any(|dir| {
+                dir.split('\\')
+                    .next()
+                    .is_some_and(|first| first.eq_ignore_ascii_case(name))
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 /// Fewer records the older they are: all of the last 20, then one per hour for a
@@ -844,6 +883,8 @@ impl Store {
             free: m.free_bytes,
             files: m.summary.files,
             dirs: m.summary.dirs,
+            serial: m.identity.serial,
+            unread_top: Some(unread_among(&top, &m.summary.unread_dirs)),
             top,
         };
         let mut records = self.load_records(key);

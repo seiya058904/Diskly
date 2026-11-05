@@ -212,6 +212,16 @@ try {
     assert.equal(await count("#history .trend"), 2, "one chart per disk, never two scales on one");
   });
 
+  await check("the long view shows only what it knows, from three records up", async () => {
+    await openClean("long-view");
+    assert.equal(await count("#history .trend"), 2, "two records are too few for a chart");
+    assert.equal(await count("#history .trend-rows"), 1, "records from before serials compare nothing");
+    const rows = await texts("#history .trend-row");
+    assert.equal(rows.length, 1, rows.join());
+    assert.ok(rows[0].startsWith("Windows"), rows[0]);
+    assert.ok(!(await text("#history")).includes("Users"), "a folder read only in part has no change");
+  });
+
   await check("it says what Diskly itself takes, against the limit", async () => {
     await openClean("normal");
     const shown = await text("#footprint");

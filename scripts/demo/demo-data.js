@@ -226,6 +226,7 @@ function recordsOf(letter, total, usedNow, perMonthGb, topNow) {
       id: `${String(NOW - age).padStart(12, "0")}-r${i}`, at: NOW - age, letter, engine: "mft",
       total, free: total - usedGb * GB, files: 500000, dirs: 90000,
       top: i === count - 1 ? topNow.map(([n, g]) => [n, g * 0.72 * GB]) : i === 0 ? topNow.map(([n, g]) => [n, g * GB]) : [],
+      serial: 1, unread_top: [],
     });
   }
   return out;
@@ -370,9 +371,9 @@ const SCENARIOS = {
       [{ ext: `<img src=x onerror="window.__pwned=10">`, kind: "other", size: 3 * GB, count: 1 }],
     );
     v.records = [
-      { id: "1", at: TIMES[0], letter: "C", engine: "mft", total: 475 * GB, free: 410 * GB, files: 1, dirs: 1, top: [[bad, 1 * GB]] },
-      { id: "2", at: TIMES[1], letter: "C", engine: "mft", total: 475 * GB, free: 405 * GB, files: 1, dirs: 1, top: [] },
-      { id: "3", at: TIMES[3], letter: "C", engine: "mft", total: 475 * GB, free: 395 * GB, files: 1, dirs: 1, top: [[bad, 5 * GB]] },
+      { id: "1", at: TIMES[0], letter: "C", engine: "mft", total: 475 * GB, free: 410 * GB, files: 1, dirs: 1, top: [[bad, 1 * GB]], serial: 1, unread_top: [] },
+      { id: "2", at: TIMES[1], letter: "C", engine: "mft", total: 475 * GB, free: 405 * GB, files: 1, dirs: 1, top: [], serial: 1, unread_top: [] },
+      { id: "3", at: TIMES[3], letter: "C", engine: "mft", total: 475 * GB, free: 395 * GB, files: 1, dirs: 1, top: [[bad, 5 * GB]], serial: 1, unread_top: [] },
     ];
     v.issues = [`<img src=x onerror="window.__pwned=5">`];
     return page([v], {
@@ -387,6 +388,27 @@ const SCENARIOS = {
     c.table = tableOf(C_ROWS.map((r) => [r[0], r[4]]), 1);
     c.file_changes = {};
     return page([c]);
+  },
+
+  /* The long view: one disk with a folder it could not read at the end, one with only
+     records from before that was kept, and one with too few records for a chart. */
+  "long-view": () => {
+    const known = (id, at, top, unread) => ({ id, at, letter: "C", engine: "mft", total: 475 * GB, free: 300 * GB, files: 1, dirs: 1, top, serial: 1, unread_top: unread });
+    const c = cVolume();
+    c.records = [
+      known("1", TIMES[0], [["Users", 60 * GB], ["Windows", 30 * GB]], []),
+      known("2", TIMES[1], [], null),
+      known("3", TIMES[3], [["Users", 10 * GB], ["Windows", 33 * GB]], ["Users"]),
+    ];
+    const d = dVolume();
+    d.records = [
+      { id: "1", at: TIMES[0], letter: "D", engine: "mft", total: 931 * GB, free: 700 * GB, files: 1, dirs: 1, top: [["Games", 90 * GB]] },
+      { id: "2", at: TIMES[1], letter: "D", engine: "mft", total: 931 * GB, free: 700 * GB, files: 1, dirs: 1, top: [] },
+      { id: "3", at: TIMES[3], letter: "D", engine: "mft", total: 931 * GB, free: 700 * GB, files: 1, dirs: 1, top: [["Games", 10 * GB]] },
+    ];
+    const e = eVolume();
+    e.records = [known("1", TIMES[0], [["Data", 1 * GB]], []), known("2", TIMES[3], [["Data", 9 * GB]], [])];
+    return page([c, d, e]);
   },
 
   empty: () => ({ format: 2, app_version: "0.2.0", generated_at: NOW, theme: "dark", footprint: footprint({ snapshots: 0, reports: 0, records: 0, total: 13 * MB }), run: null, volumes: [] }),

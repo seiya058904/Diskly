@@ -464,18 +464,22 @@ const DisklyLib = (() => {
     return `${speed}，按这个速度约 ${Math.round(f.months)} 个月后写满。`;
   }
 
-  /* How the top-level folders changed since the oldest record, among scans of one
-     engine. A folder missing from either end has no known size there, so it is left
-     out rather than taken for new or gone. */
+  /* How the top-level folders changed since the oldest record of the same file
+     system and engine. A folder missing from either end, or holding something that
+     could not be read there, has no known size, so it is left out rather than taken
+     for new, gone or shrunk. Records from before these were kept compare nothing.
+     `long_term_base` in store.rs picks the same oldest record. */
   function longTerm(records) {
     const list = records || [];
     const last = list[list.length - 1];
-    if (!last || !last.top?.length) return null;
-    const first = list.find((r) => r.engine === last.engine && r.top?.length);
+    const knows = (r) => r.top?.length && r.serial != null && Array.isArray(r.unread_top);
+    if (!last || !knows(last)) return null;
+    const first = list.find((r) => knows(r) && r.engine === last.engine && r.serial === last.serial);
     if (!first || first.id === last.id) return null;
     const before = new Map(first.top);
+    const unknown = new Set([...first.unread_top, ...last.unread_top].map((name) => name.toLowerCase()));
     const rows = last.top
-      .filter(([name]) => before.has(name))
+      .filter(([name]) => before.has(name) && !unknown.has(name.toLowerCase()))
       .map(([name, size]) => ({ name, size, delta: size - before.get(name) }))
       .filter((row) => Math.abs(row.delta) >= 1024 * 1024)
       .sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta))

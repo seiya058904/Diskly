@@ -11,7 +11,9 @@ use crate::compare::{self, FileChanges, NodeTable, PairStatus};
 use crate::insights::{self, Insights};
 use crate::report;
 use crate::scan::{ScanStatus, ScanSummary};
-use crate::store::{now_unix, Footprint, ScanRecord, SnapshotMeta, Store, KEEP_REPORTS};
+use crate::store::{
+    long_term_base, now_unix, Footprint, ScanRecord, SnapshotMeta, Store, KEEP_REPORTS,
+};
 use crate::volumes::Volume;
 
 /// Folders shown in one report, shared among its volumes, so that it stays small
@@ -318,15 +320,13 @@ pub fn report_data(store: &Store, run: Option<&RunRecord>, connected: &[Volume])
                 }
             }
             let mut records = store.load_records(key);
-            // Long-term comparison only needs the two ends, among scans of one engine.
-            let newest_engine = records.last().map(|r| r.engine.clone());
-            let first_alike = records
-                .iter()
-                .position(|r| Some(&r.engine) == newest_engine.as_ref() && !r.top.is_empty());
+            // Long-term comparison only needs the two ends.
+            let base = long_term_base(&records);
             let newest_record = records.len().saturating_sub(1);
             for (i, record) in records.iter_mut().enumerate() {
-                if Some(i) != first_alike && i != newest_record {
+                if Some(i) != base && i != newest_record {
                     record.top = Vec::new();
+                    record.unread_top = None;
                 }
             }
             VolumeReport {

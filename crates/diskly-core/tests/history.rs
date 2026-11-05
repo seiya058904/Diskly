@@ -10,7 +10,7 @@ use diskghost_core::{diff, Progress};
 use diskly_core::compare::{build_table, pair_status, NodeTable, PairStatus};
 use diskly_core::scan::{scan_root, ScanStatus};
 use diskly_core::session::{commit_run, report_data, write_report, VolumeResult};
-use diskly_core::store::{thin_records, ScanRecord, SnapshotMeta, Store};
+use diskly_core::store::{long_term_base, thin_records, ScanRecord, SnapshotMeta, Store};
 use diskly_core::volumes::{Volume, VolumeIdentity};
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -804,6 +804,8 @@ fn records_get_sparser_with_age_and_stay_few_however_many_scans_there_are() {
         files: 1,
         dirs: 1,
         top: Vec::new(),
+        serial: None,
+        unread_top: None,
     };
     // Ten years of scanning every half hour.
     let mut records: Vec<ScanRecord> = (0..(3650 * 48)).map(|i| record(i * 1800)).collect();
@@ -829,6 +831,74 @@ fn records_get_sparser_with_age_and_stay_few_however_many_scans_there_are() {
     let count = records.len();
     thin_records(&mut records, now);
     assert_eq!(records.len(), count);
+}
+
+fn with_top(id: &str, at: u64, engine: &str, serial: Option<u32>, known: bool) -> ScanRecord {
+    ScanRecord {
+        id: id.into(),
+        at,
+        letter: 'C',
+        engine: engine.into(),
+        total: 1,
+        free: 1,
+        files: 1,
+        dirs: 1,
+        top: vec![("Users".into(), 1)],
+        serial,
+        unread_top: known.then(Vec::new),
+    }
+}
+
+#[test]
+fn the_long_term_base_is_the_oldest_of_the_same_file_system_and_engine() {
+    let old = with_top("1", 1, "mft", Some(7), false);
+    let other_format = with_top("2", 2, "mft", Some(6), true);
+    let other_engine = with_top("3", 3, "walk", Some(7), true);
+    let base = with_top("4", 4, "mft", Some(7), true);
+    let later = with_top("5", 5, "mft", Some(7), true);
+    let newest = with_top("6", 6, "mft", Some(7), true);
+    let list = [old.clone(), other_format, other_engine, base, later, newest];
+    assert_eq!(long_term_base(&list), Some(3));
+    assert_eq!(long_term_base(&[old.clone(), old]), None, "old records");
+    assert_eq!(long_term_base(&[]), None);
+}
+
+#[test]
+fn records_say_what_could_not_be_read_and_reach_the_report_at_both_ends() {
+    let (tree, data) = (TestDir::new("tree"), TestDir::new("data"));
+    tree.write(r"Readable\a.bin", 1_000);
+    tree.write(r"Secret\inner\locked\b.bin", 1_000);
+    tree.write(r"Secret\c.bin", 1_000);
+    let store = Store::open(&data.0).unwrap();
+    let v = volume(&tree.0, 'T', "g1", 7);
+    scan_and_commit(&store, "000000000001-a", 1, &v);
+    {
+        let _denied = Denied::new(tree.path(r"Secret\inner\locked"));
+        scan_and_commit(&store, "000000000002-a", 2, &v);
+    }
+    scan_and_commit(&store, "000000000003-a", 3, &v);
+
+    let records = store.load_records("v-g1");
+    assert_eq!(records.len(), 3);
+    assert!(records.iter().all(|r| r.serial == Some(7)));
+    assert_eq!(records[0].unread_top, Some(Vec::new()));
+    assert_eq!(records[1].unread_top, Some(vec!["Secret".to_string()]));
+    assert_eq!(records[2].unread_top, Some(Vec::new()));
+
+    let report = report_data(&store, None, std::slice::from_ref(&v));
+    let shown = &report.volumes[0].records;
+    assert!(shown[0].knows_its_folders(), "the oldest end");
+    assert!(shown[2].knows_its_folders(), "the newest end");
+    assert!(shown[1].top.is_empty() && shown[1].unread_top.is_none());
+}
+
+#[test]
+fn a_record_from_before_this_was_kept_still_loads_and_knows_nothing() {
+    let line = r#"{"id":"1","at":1,"letter":"C","engine":"mft","total":1,"free":1,"files":1,"dirs":1,"top":[["Users",1]]}"#;
+    let old: ScanRecord = serde_json::from_str(line).unwrap();
+    assert_eq!(old.top.len(), 1);
+    assert_eq!((old.serial, old.unread_top.as_ref()), (None, None));
+    assert!(!old.knows_its_folders());
 }
 
 #[test]
