@@ -556,6 +556,41 @@ test("personal folders can hide their contents and keep them apart", () => {
   assert.equal(redact("C:\\Users\\me\\AppData\\Local\\Google"), "C:\\Users\\<用户>\\AppData\\Local\\Google");
 });
 
+test("a one-character account name is hidden as a folder, and nowhere else", () => {
+  const volume = volumeOf(
+    [
+      ["Users", 1, 1],
+      ["Users\\a", 1, 1],
+      ["Users\\王", 1, 1],
+      ["Users\\ab", 1, 1],
+      ["Users\\B", 1, 1],
+      ["Users\\Public", 1, 1],
+      ["Users\\Default", 1, 1],
+    ],
+    { snapshots: two() },
+  );
+  const names = lib.accountNames([volume]);
+  assert.deepEqual([...names].sort(), ["B", "a", "ab", "王"].sort());
+  const redact = lib.makeRedactor(names, { accounts: true });
+  assert.equal(redact("C:\\Users\\a\\Downloads"), "C:\\Users\\<用户>\\Downloads");
+  assert.equal(redact("C:\\Users\\A\\Downloads"), "C:\\Users\\<用户>\\Downloads", "Windows ignores case");
+  assert.equal(redact("C:\\users\\b"), "C:\\users\\<用户>");
+  assert.equal(redact("C:\\Users\\王\\下载"), "C:\\Users\\<用户>\\下载");
+  assert.equal(redact("C:\\Users\\ab\\x"), "C:\\Users\\<用户>\\x", "two characters still work as before");
+  assert.equal(redact("C:\\Users\\Public\\a"), "C:\\Users\\Public\\a");
+  assert.equal(redact("C:\\Users\\Default\\a"), "C:\\Users\\Default\\a");
+  assert.equal(redact("D:\\data\\a-b.txt"), "D:\\data\\a-b.txt", "not a fragment of a name");
+  assert.equal(redact("D:\\a\\b.txt"), "D:\\a\\b.txt", "not a folder elsewhere");
+  assert.equal(redact("D:\\王者荣耀\\王.txt"), "D:\\王者荣耀\\王.txt", "not inside a Chinese phrase");
+  assert.equal(redact("C:\\Users\\a\\AppData\\a.log"), "C:\\Users\\<用户>\\AppData\\a.log");
+  const off = lib.makeRedactor(names, { accounts: false });
+  assert.equal(off("C:\\Users\\a\\x"), "C:\\Users\\a\\x");
+  const both = lib.makeRedactor(names, { accounts: true, personal: true });
+  assert.equal(both("C:\\Users\\a\\Documents\\王\\a.txt"), "C:\\Users\\<用户>\\Documents\\<名称1>\\<名称2>");
+  const personalOnly = lib.makeRedactor(names, { accounts: false, personal: true });
+  assert.equal(personalOnly("C:\\Users\\a\\Documents\\x"), "C:\\Users\\a\\Documents\\<名称1>");
+});
+
 test("hostile characters in a name cannot break the pattern", () => {
   const redact = lib.makeRedactor(["a.b(c"], { accounts: true });
   assert.equal(redact("C:\\Users\\a.b(c\\x"), "C:\\Users\\<用户>\\x");

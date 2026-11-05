@@ -615,7 +615,8 @@ const DisklyLib = (() => {
   const NOT_A_USER = new Set(["public", "default", "default user", "all users", "defaultapppool"]);
   const PERSONAL = new Set(["desktop", "documents", "downloads", "pictures", "videos", "music", "onedrive", "favorites", "contacts"]);
 
-  /* The account names a report shows, from the folders under C:\Users. */
+  /* The account names a report shows, from the folders under C:\Users. Windows allows
+     a name of one character. */
   function accountNames(volumes) {
     const names = new Set();
     for (const volume of volumes) {
@@ -623,7 +624,7 @@ const DisklyLib = (() => {
       const users = table.names.findIndex((name, i) => i > 0 && table.parents[i] === 0 && name.toLowerCase() === "users");
       if (users < 0) continue;
       table.names.forEach((name, i) => {
-        if (table.parents[i] === users && !NOT_A_USER.has(name.toLowerCase()) && name.length >= 2) names.add(name);
+        if (table.parents[i] === users && !NOT_A_USER.has(name.toLowerCase())) names.add(name);
       });
     }
     return [...names].sort((x, y) => y.length - x.length);
@@ -641,13 +642,18 @@ const DisklyLib = (() => {
       if (!stand.has(key)) stand.set(key, `<名称${stand.size + 1}>`);
       return stand.get(key);
     };
+    /* One character would match all over the place ("a" in "a-b.txt", "王" in "王者"),
+       so such a name is only hidden as the folder directly under Users. */
+    const isOneCharacter = (name) => [...name].length === 1;
+    const oneCharacter = new Set(names.filter(isOneCharacter).map((name) => name.toLowerCase()));
+    const longer = names.filter((name) => !isOneCharacter(name));
     /* A short Latin name must not eat into other words ("me" in "Documents").
        Chinese has no word boundaries, and a name inside a phrase still counts. */
     const nameRule = (name) =>
       /^[\x00-\x7f]*$/.test(name)
         ? `(?<![A-Za-z0-9])${escapeRegExp(name)}(?![A-Za-z0-9])`
         : escapeRegExp(name);
-    const pattern = names.length ? new RegExp(names.map(nameRule).join("|"), "gi") : null;
+    const pattern = longer.length ? new RegExp(longer.map(nameRule).join("|"), "gi") : null;
     return (path) => {
       let parts = path.split("\\");
       if (personal) {
@@ -660,7 +666,8 @@ const DisklyLib = (() => {
         }
       }
       if (accounts) {
-        parts = parts.map((part) => {
+        parts = parts.map((part, i) => {
+          if (i > 0 && parts[i - 1].toLowerCase() === "users" && oneCharacter.has(part.toLowerCase())) return "<用户>";
           let out = part.replace(/^(OneDrive - ).+$/i, "$1<组织>");
           if (pattern) out = out.replace(pattern, "<用户>");
           return out;
