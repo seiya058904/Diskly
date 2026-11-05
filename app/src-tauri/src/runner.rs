@@ -136,6 +136,20 @@ pub struct Control {
 }
 
 impl Control {
+    /// Make `tracks` the ones a cancel reaches. A cancel that came first was latched
+    /// before this lock could be taken, so one or the other always stops them.
+    fn install_tracks(&self, tracks: &[Arc<Track>]) {
+        if let Ok(mut shared) = self.tracks.lock() {
+            shared.clear();
+            shared.extend_from_slice(tracks);
+            if self.cancel.load(Ordering::Relaxed) {
+                for t in tracks {
+                    t.progress.cancel();
+                }
+            }
+        }
+    }
+
     pub fn request_cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
         if let Ok(tracks) = self.tracks.lock() {
@@ -147,6 +161,13 @@ impl Control {
 }
 
 type ScanResult = (ScanSummary, Option<Snapshot>);
+
+fn cancelled_result() -> ScanResult {
+    let mut summary = ScanSummary::failed("扫描已取消", 0.0);
+    summary.status = ScanStatus::Cancelled;
+    summary.error = None;
+    (summary, None)
+}
 
 /// Scan time. Waiting for the user to answer a prompt is not part of it.
 struct Clock(Mutex<Instant>);
@@ -241,6 +262,17 @@ fn scan_fast(
     phase: &Mutex<&'static str>,
     clock: &Clock,
 ) -> (Vec<ScanResult>, bool) {
+    // Nobody wants this scan any more, so nobody should be asked for rights for it.
+    if control.cancel.load(Ordering::Relaxed) {
+        let results = tracks
+            .iter()
+            .map(|t| {
+                t.set_state(DONE);
+                cancelled_result()
+            })
+            .collect();
+        return (results, false);
+    }
     if is_elevated() {
         // Already administrator: no prompt, no helper.
         let results = run_per_disk(
@@ -302,14 +334,7 @@ fn scan_fast(
             .into_iter();
             let merged = results
                 .into_iter()
-                .map(|r| {
-                    r.or_else(|| walked.next()).unwrap_or_else(|| {
-                        let mut s = ScanSummary::failed("扫描已取消", 0.0);
-                        s.status = ScanStatus::Cancelled;
-                        s.error = None;
-                        (s, None)
-                    })
-                })
+                .map(|r| r.or_else(|| walked.next()).unwrap_or_else(cancelled_result))
                 .collect();
             (merged, false)
         }
@@ -341,9 +366,7 @@ pub fn run(
         .into_iter()
         .map(|v| Arc::new(Track::new(v)))
         .collect();
-    if let Ok(mut shared) = control.tracks.lock() {
-        shared.clone_from(&tracks);
-    }
+    control.install_tracks(&tracks);
 
     let phase = Mutex::new(if mode == "fast" {
         "consent"
@@ -442,4 +465,222 @@ pub fn run(
         error,
         run: Some(run),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicU32;
+    use std::sync::Barrier;
+
+    use diskly_core::volumes::VolumeIdentity;
+    use tauri::ipc::InvokeResponseBody;
+
+    const FILES: u64 = 40;
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> TempDir {
+            let n = NEXT.fetch_add(1, Ordering::SeqCst);
+            let dir =
+                std::env::temp_dir().join(format!("diskly-runner-{}-{n}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+
+        fn with_files() -> TempDir {
+            let dir = TempDir::new();
+            for i in 0..FILES {
+                std::fs::write(dir.0.join(format!("{i}.bin")), [7u8; 16]).unwrap();
+            }
+            dir
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn track_of(dir: &TempDir) -> Arc<Track> {
+        Arc::new(Track::new(Volume {
+            letter: 'T',
+            root: dir.0.clone(),
+            label: "test".into(),
+            identity: VolumeIdentity {
+                guid: Some("g".into()),
+                serial: Some(1),
+                file_system: Some("NTFS".into()),
+            },
+            total_bytes: 1,
+            free_bytes: 0,
+            physical_disk: None,
+            problem: None,
+        }))
+    }
+
+    fn assert_walked_nothing(results: &[ScanResult], tracks: &[Arc<Track>]) {
+        for ((summary, snapshot), track) in results.iter().zip(tracks) {
+            assert_eq!(summary.status, ScanStatus::Cancelled);
+            assert_eq!(summary.files, 0, "the walk must not read the disk");
+            assert_eq!(track.progress.files(), 0);
+            assert!(snapshot.is_none());
+        }
+    }
+
+    #[test]
+    fn a_cancel_before_the_tracks_exist_stops_the_walk() {
+        let dir = TempDir::with_files();
+        let tracks = vec![track_of(&dir)];
+        let control = Arc::new(Control::default());
+        let cancelled = Arc::new(Barrier::new(2));
+        let clicker = {
+            let (control, cancelled) = (control.clone(), cancelled.clone());
+            std::thread::spawn(move || {
+                control.request_cancel();
+                cancelled.wait();
+            })
+        };
+        cancelled.wait();
+        control.install_tracks(&tracks);
+        clicker.join().unwrap();
+        assert_walked_nothing(&walk_all(&tracks, None), &tracks);
+    }
+
+    #[test]
+    fn a_cancel_racing_the_tracks_always_reaches_them() {
+        let dir = TempDir::new();
+        for _ in 0..500 {
+            let tracks = vec![track_of(&dir)];
+            let control = Arc::new(Control::default());
+            let start = Arc::new(Barrier::new(2));
+            let clicker = {
+                let (control, start) = (control.clone(), start.clone());
+                std::thread::spawn(move || {
+                    start.wait();
+                    control.request_cancel();
+                })
+            };
+            start.wait();
+            control.install_tracks(&tracks);
+            clicker.join().unwrap();
+            assert!(tracks[0].progress.cancelled());
+        }
+    }
+
+    #[test]
+    fn a_cancel_after_the_tracks_exist_stops_the_walk() {
+        let dir = TempDir::with_files();
+        let tracks = vec![track_of(&dir)];
+        let control = Control::default();
+        control.install_tracks(&tracks);
+        assert!(!tracks[0].progress.cancelled());
+        control.request_cancel();
+        assert_walked_nothing(&walk_all(&tracks, None), &tracks);
+    }
+
+    #[test]
+    fn the_cancel_of_one_scan_does_not_reach_the_next() {
+        let dir = TempDir::with_files();
+        let control = Control::default();
+        let first = vec![track_of(&dir)];
+        control.request_cancel();
+        control.install_tracks(&first);
+        assert!(first[0].progress.cancelled());
+
+        // What start_scan does before the next run.
+        control.cancel.store(false, Ordering::Relaxed);
+        let second = vec![track_of(&dir)];
+        control.install_tracks(&second);
+        let results = walk_all(&second, None);
+        assert_eq!(results[0].0.status, ScanStatus::Complete);
+        assert_eq!(results[0].0.files, FILES);
+    }
+
+    #[test]
+    fn a_cancel_after_the_end_changes_nothing_that_was_found() {
+        let dir = TempDir::with_files();
+        let tracks = vec![track_of(&dir)];
+        let control = Control::default();
+        control.install_tracks(&tracks);
+        let results = walk_all(&tracks, None);
+        control.request_cancel();
+        assert_eq!(results[0].0.status, ScanStatus::Complete);
+        assert_eq!(results[0].0.files, FILES);
+    }
+
+    #[test]
+    fn a_fast_scan_cancelled_early_asks_for_nothing_and_reads_nothing() {
+        let (dir, data) = (TempDir::with_files(), TempDir::new());
+        let tracks = vec![track_of(&dir)];
+        let control = Arc::new(Control::default());
+        control.request_cancel();
+        control.install_tracks(&tracks);
+        let store = Store::open(&data.0).unwrap();
+        let phase = Mutex::new("consent");
+        let (results, declined) = scan_fast(
+            &store,
+            &tracks,
+            &control,
+            std::ptr::null_mut(),
+            &phase,
+            &Clock::new(),
+        );
+        assert!(!declined);
+        assert_walked_nothing(&results, &tracks);
+        assert_eq!(tracks[0].view().state, "done");
+    }
+
+    /// The whole of `run` on this machine's disks: it may only end this quickly and
+    /// with nothing stored because the walk stops at once.
+    fn run_cancelled_from_the_start(mode: &str) {
+        std::env::set_var("DISKLY_NO_BROWSER", "1");
+        let data = TempDir::new();
+        let store = Store::open(&data.0).unwrap();
+        let control = Arc::new(Control::default());
+        control.running.store(true, Ordering::Relaxed);
+        control.request_cancel();
+        let finished = Arc::new(Mutex::new(None::<serde_json::Value>));
+        let events = {
+            let finished = finished.clone();
+            Channel::new(move |body| {
+                if let InvokeResponseBody::Json(text) = body {
+                    let event: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    if event["kind"] == "finished" {
+                        *finished.lock().unwrap() = Some(event);
+                    }
+                }
+                Ok(())
+            })
+        };
+        run(
+            store,
+            mode.to_string(),
+            control.clone(),
+            events,
+            std::ptr::null_mut(),
+        );
+        assert!(!control.running.load(Ordering::Relaxed));
+        let event = finished.lock().unwrap().take().expect("a final event");
+        assert_eq!(event["cancelled"], true);
+        assert_eq!(event["stored"], 0);
+        assert!(event["error"].is_null(), "{event}");
+        for volume in event["run"]["volumes"].as_array().unwrap() {
+            assert_eq!(volume["files"], 0, "{volume}");
+        }
+    }
+
+    #[test]
+    fn a_normal_run_cancelled_from_the_start_reads_no_disk() {
+        run_cancelled_from_the_start("normal");
+    }
+
+    #[test]
+    fn a_fast_run_cancelled_from_the_start_reads_no_disk() {
+        run_cancelled_from_the_start("fast");
+    }
 }
