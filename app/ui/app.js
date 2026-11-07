@@ -317,6 +317,8 @@ function runDetail(run) {
   if (of("cancelled")) parts.push(`${of("cancelled")} 已取消`);
   if (of("failed")) parts.push(`${of("failed")} 失败`);
   parts.push(`用时 ${seconds(run.seconds)}`);
+  const availability = { saved: "报告已保存", rebuildable: "详情可重建", partial: "部分详情可用", summary: "仅保留摘要" };
+  if (availability[run.availability]) parts.push(availability[run.availability]);
   return parts.join("，");
 }
 
@@ -335,9 +337,10 @@ async function renderHistory() {
     view.append(el("div", { class: "group" }, el("div", { class: "empty", text: "还没有扫描记录。回到首页点“扫描”，开始第一次扫描。" })));
     return;
   }
-  const stored = runs.filter((r) => r.volumes.some((v) => v.stored));
+  const canOpen = (run) => run.availability ? run.availability !== "none" : run.volumes.some((v) => v.stored);
+  const stored = runs.filter(canOpen);
   view.append(el("section", { class: "group fade-in" }, ...runs.map((run) => {
-    const hasData = run.volumes.some((v) => v.stored);
+    const hasData = canOpen(run);
     const body = [
       el("span", { class: "row-main" },
         el("span", { class: "row-title", text: dateTime(run.started_at) }),
@@ -346,7 +349,7 @@ async function renderHistory() {
     if (hasData) return el("button", { type: "button", class: "row", onclick: () => openReport(run.scan_id) }, ...body, svg("0 0 8 13", "M1.5 1.5L6.5 6.5L1.5 11.5", "row-chevron"));
     return el("div", { class: "row" }, ...body);
   })));
-  if (stored.length) view.append(el("p", { class: "section-note", text: "每份报告都能切换和比较历史扫描。" }));
+  if (stored.length) view.append(el("p", { class: "section-note", text: "打开的是所选那次扫描。详情已清理时只显示保留的摘要；仍有详情的扫描可以比较。" }));
 }
 
 /* ---- Settings ---- */

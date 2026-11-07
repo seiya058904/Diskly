@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use diskly_core::session::{write_report, RunRecord};
+use diskly_core::session::{list_run_views, prepare_report, RunRecord, RunView};
 use diskly_core::store::{
     clear_webview_folder, folder_size, Footprint, Settings, Store, WEBVIEW_LIMIT,
 };
@@ -126,8 +126,8 @@ fn cancel_scan(state: State<AppState>) {
 }
 
 #[tauri::command(async)]
-fn list_runs(state: State<AppState>) -> Vec<RunRecord> {
-    state.store.list_runs()
+fn list_runs(state: State<AppState>) -> Vec<RunView> {
+    list_run_views(&state.store)
 }
 
 /// Open the report of a run, making it again if its file is gone.
@@ -139,14 +139,7 @@ fn open_report(scan_id: String, state: State<AppState>) -> Result<(), String> {
         .into_iter()
         .find(|r| r.scan_id == scan_id)
         .ok_or("找不到这次扫描的记录")?;
-    let existing = run
-        .report_file
-        .as_deref()
-        .and_then(|f| store.report_path(f));
-    let path = match existing {
-        Some(path) => path,
-        None => write_report(store, &mut run, &fixed_volumes())?,
-    };
+    let path = prepare_report(store, &mut run, &fixed_volumes())?;
     shell::open_in_browser(&path)
 }
 

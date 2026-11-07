@@ -223,7 +223,7 @@ function recordsOf(letter, total, usedNow, perMonthGb, topNow) {
     const wobble = Math.sin(i * 1.7) * 0.8;
     const usedGb = usedNow - (age / (30.44 * DAY)) * perMonthGb + (i ? wobble : 0);
     out.push({
-      id: `${String(NOW - age).padStart(12, "0")}-r${i}`, at: NOW - age, letter, engine: "mft",
+      id: i === 0 ? ids[3] : `${String(NOW - age).padStart(12, "0")}-r${i}`, at: NOW - age, letter, engine: "mft",
       total, free: total - usedGb * GB, files: 500000, dirs: 90000,
       top: i === count - 1 ? topNow.map(([n, g]) => [n, g * 0.72 * GB]) : i === 0 ? topNow.map(([n, g]) => [n, g * GB]) : [],
       serial: 1, unread_top: [],
@@ -296,6 +296,41 @@ function page(volumes, runOver) {
 
 const SCENARIOS = {
   normal: () => page([cVolume(), dVolume(), eVolume()]),
+
+  historical: () => page([cVolume(), dVolume(), eVolume()], { scan_id: ids[1], started_at: TIMES[1] }),
+
+  legacy: () => {
+    const data = page([cVolume(), dVolume()], { scan_id: ids[1], started_at: TIMES[1] });
+    data.format = 1;
+    delete data.theme; delete data.footprint;
+    for (const v of data.volumes) { delete v.insights; delete v.records; }
+    return data;
+  },
+
+  "same-second": () => {
+    const c = cVolume();
+    for (const s of c.snapshots) s.taken_at = NOW;
+    c.records = [];
+    return page([c], { scan_id: ids[1], started_at: NOW });
+  },
+
+  archived: () => {
+    const c = cVolume();
+    const old = c.snapshots[0];
+    c.records = c.records.filter((r) => r.at < old.taken_at).concat([
+      { id: old.id, at: old.taken_at, letter: "C", engine: "mft", total: old.total_bytes, free: old.free_bytes, files: old.files, dirs: old.dirs },
+      c.records.at(-1),
+    ]);
+    c.snapshots = c.snapshots.slice(1);
+    c.table.sizes = c.table.sizes.slice(1);
+    c.table.unread = c.table.unread.slice(1);
+    return page([c], { scan_id: old.id, started_at: old.taken_at });
+  },
+
+  "run-only": () => {
+    const c = cVolume();
+    return page([c], { scan_id: "000000000100-archived", started_at: 100 });
+  },
 
   first: () => {
     const c = cVolume();
@@ -396,15 +431,15 @@ const SCENARIOS = {
     const known = (id, at, top, unread) => ({ id, at, letter: "C", engine: "mft", total: 475 * GB, free: 300 * GB, files: 1, dirs: 1, top, serial: 1, unread_top: unread });
     const c = cVolume();
     c.records = [
-      known("1", TIMES[0], [["Users", 60 * GB], ["Windows", 30 * GB]], []),
-      known("2", TIMES[1], [], null),
-      known("3", TIMES[3], [["Users", 10 * GB], ["Windows", 33 * GB]], ["Users"]),
+      known(ids[0], TIMES[0], [["Users", 60 * GB], ["Windows", 30 * GB]], []),
+      known(ids[1], TIMES[1], [], null),
+      known(ids[3], TIMES[3], [["Users", 10 * GB], ["Windows", 33 * GB]], ["Users"]),
     ];
     const d = dVolume();
     d.records = [
-      { id: "1", at: TIMES[0], letter: "D", engine: "mft", total: 931 * GB, free: 700 * GB, files: 1, dirs: 1, top: [["Games", 90 * GB]] },
-      { id: "2", at: TIMES[1], letter: "D", engine: "mft", total: 931 * GB, free: 700 * GB, files: 1, dirs: 1, top: [] },
-      { id: "3", at: TIMES[3], letter: "D", engine: "mft", total: 931 * GB, free: 700 * GB, files: 1, dirs: 1, top: [["Games", 10 * GB]] },
+      { id: ids[0], at: TIMES[0], letter: "D", engine: "mft", total: 931 * GB, free: 700 * GB, files: 1, dirs: 1, top: [["Games", 90 * GB]] },
+      { id: ids[1], at: TIMES[1], letter: "D", engine: "mft", total: 931 * GB, free: 700 * GB, files: 1, dirs: 1, top: [] },
+      { id: ids[3], at: TIMES[3], letter: "D", engine: "mft", total: 931 * GB, free: 700 * GB, files: 1, dirs: 1, top: [["Games", 10 * GB]] },
     ];
     const e = eVolume();
     e.records = [known("1", TIMES[0], [["Data", 1 * GB]], []), known("2", TIMES[3], [["Data", 9 * GB]], [])];
@@ -431,4 +466,6 @@ if (!SCENARIOS[scenario]) {
   console.error(`unknown scenario: ${scenario}. Known: ${Object.keys(SCENARIOS).join(", ")}`);
   process.exit(2);
 }
-process.stdout.write(JSON.stringify(SCENARIOS[scenario]()));
+// Stored sizes, counts and Unix times are integers; decimal GB fixtures must
+// round to the real schema too, so cached-report migration tests can use them.
+process.stdout.write(JSON.stringify(SCENARIOS[scenario](), (key, value) => typeof value === "number" && key !== "seconds" ? Math.round(value) : value));

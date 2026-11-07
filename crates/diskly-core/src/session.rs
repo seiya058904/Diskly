@@ -60,6 +60,155 @@ pub struct RunRecord {
     pub issues: Vec<String>,
 }
 
+/// Availability is computed now, never persisted as a claim that survives pruning.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportAvailability {
+    Saved,
+    Rebuildable,
+    Partial,
+    Summary,
+    None,
+}
+
+#[derive(Serialize)]
+pub struct RunView {
+    #[serde(flatten)]
+    pub run: RunRecord,
+    pub availability: ReportAvailability,
+}
+
+fn cached_report(store: &Store, run: &RunRecord) -> Option<serde_json::Value> {
+    let path = store.report_path(run.report_file.as_deref()?)?;
+    let html = std::fs::read_to_string(path).ok()?;
+    let data = report::saved_data(&html)?;
+    (data["run"]["scan_id"].as_str() == Some(&run.scan_id)).then_some(data)
+}
+
+fn cached_volume<'a>(
+    data: &'a serde_json::Value,
+    volume: &RunVolume,
+    scan_id: &str,
+) -> Option<&'a serde_json::Value> {
+    data["volumes"].as_array()?.iter().find(|v| {
+        v["key"].as_str() == volume.volume_key.as_deref()
+            && v["snapshots"]
+                .as_array()
+                .is_some_and(|scans| scans.iter().any(|s| s["id"].as_str() == Some(scan_id)))
+    })
+}
+
+pub fn report_availability(store: &Store, run: &RunRecord) -> ReportAvailability {
+    let expected: Vec<_> = run.volumes.iter().filter(|v| v.stored).collect();
+    if expected.is_empty() {
+        return ReportAvailability::None;
+    }
+    let cached = cached_report(store, run);
+    let cached_has = |volume: &RunVolume| {
+        cached
+            .as_ref()
+            .is_some_and(|data| cached_volume(data, volume, &run.scan_id).is_some())
+    };
+    if expected.iter().all(|v| cached_has(v)) {
+        return ReportAvailability::Saved;
+    }
+    let available = expected
+        .iter()
+        .filter(|v| {
+            cached_has(v)
+                || v.volume_key.as_ref().is_some_and(|key| {
+                    store
+                        .list(key)
+                        .entries
+                        .iter()
+                        .any(|m| m.scan_id == run.scan_id && store.load(m).is_ok())
+                })
+        })
+        .count();
+    if available == expected.len() {
+        ReportAvailability::Rebuildable
+    } else if available > 0 {
+        ReportAvailability::Partial
+    } else {
+        ReportAvailability::Summary
+    }
+}
+
+pub fn list_run_views(store: &Store) -> Vec<RunView> {
+    store
+        .list_runs()
+        .into_iter()
+        .map(|run| RunView {
+            availability: report_availability(store, &run),
+            run,
+        })
+        .collect()
+}
+
+/// A cached page may be the last copy of an old scan. Keep its data, but render
+/// with the current UI so legacy pages also bind themselves to the requested run.
+pub fn prepare_report(
+    store: &Store,
+    run: &mut RunRecord,
+    connected: &[Volume],
+) -> Result<PathBuf, String> {
+    if let Some(mut data) = cached_report(store, run) {
+        if run
+            .volumes
+            .iter()
+            .filter(|v| v.stored)
+            .any(|v| cached_volume(&data, v, &run.scan_id).is_none())
+        {
+            // An older rebuild may have lost some disks' details. Recover what
+            // remains in the store without discarding another disk's last copy.
+            let mut rebuilt = serde_json::to_value(report_data(store, Some(run), connected))
+                .map_err(|e| e.to_string())?;
+            let quality = |v: &serde_json::Value| {
+                if v["snapshots"]
+                    .as_array()
+                    .is_some_and(|s| s.iter().any(|s| s["id"] == run.scan_id))
+                {
+                    2
+                } else if v["records"]
+                    .as_array()
+                    .is_some_and(|r| r.iter().any(|r| r["id"] == run.scan_id))
+                {
+                    1
+                } else {
+                    0
+                }
+            };
+            let volumes = rebuilt["volumes"].as_array_mut().unwrap();
+            for saved in data["volumes"].as_array().unwrap() {
+                let current = volumes.iter_mut().find(|v| {
+                    v["key"] == saved["key"]
+                        && (!v["key"].is_null() || v["letter"] == saved["letter"])
+                });
+                if let Some(current) = current {
+                    if quality(saved) >= quality(current) {
+                        let mut kept = saved.clone();
+                        for field in ["connected", "letter", "label", "this_run"] {
+                            kept[field] = current[field].clone();
+                        }
+                        *current = kept;
+                    }
+                } else {
+                    // A disconnected disk may only survive inside this report.
+                    let mut kept = saved.clone();
+                    kept["connected"] = false.into();
+                    volumes.push(kept);
+                }
+            }
+            data = rebuilt;
+        }
+        let html = report::render(&data).map_err(|e| e.to_string())?;
+        return store
+            .refresh_report(run.report_file.as_deref().unwrap(), &html)
+            .map_err(|e| e.to_string());
+    }
+    write_report(store, run, connected)
+}
+
 /// Store what finished, leaving history alone for what did not.
 pub fn commit_run(
     store: &Store,
@@ -163,7 +312,7 @@ fn changes_against_previous(
 }
 
 /// One stored scan, as the report sees it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotView {
     pub id: String,
     pub taken_at: u64,
@@ -211,7 +360,7 @@ impl From<&SnapshotMeta> for SnapshotView {
 }
 
 /// One volume in a report.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VolumeReport {
     pub key: Option<String>,
     pub letter: char,
@@ -227,20 +376,24 @@ pub struct VolumeReport {
     /// File changes by the newer scan's id.
     pub file_changes: BTreeMap<String, FileChanges>,
     /// Where the space went, by scan id.
+    #[serde(default)]
     pub insights: BTreeMap<String, Insights>,
     /// The long history, oldest first. Most of it has no snapshot any more.
+    #[serde(default)]
     pub records: Vec<ScanRecord>,
     pub issues: Vec<String>,
 }
 
 /// All a report shows.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReportData {
     pub format: u32,
-    pub app_version: &'static str,
+    pub app_version: String,
     pub generated_at: u64,
     /// The look chosen in the window, until the page is told otherwise.
+    #[serde(default)]
     pub theme: String,
+    #[serde(default)]
     pub footprint: Footprint,
     pub run: Option<RunRecord>,
     pub volumes: Vec<VolumeReport>,
@@ -275,6 +428,15 @@ fn load_history(
 /// Everything the report needs, from the store and what is mounted now.
 pub fn report_data(store: &Store, run: Option<&RunRecord>, connected: &[Volume]) -> ReportData {
     let mut keys = store.volume_keys();
+    // Even after all its snapshots were pruned or it was disconnected, a volume
+    // in the requested run still has a result (at least the run's own summary).
+    if let Some(run) = run {
+        for key in run.volumes.iter().filter_map(|v| v.volume_key.as_ref()) {
+            if !keys.contains(key) {
+                keys.push(key.clone());
+            }
+        }
+    }
     for volume in connected {
         if let Some(key) = volume.identity.key() {
             if !keys.contains(&key) {
@@ -292,6 +454,11 @@ pub fn report_data(store: &Store, run: Option<&RunRecord>, connected: &[Volume])
                 .iter()
                 .find(|v| v.identity.key().as_deref() == Some(key));
             let last = history.last().map(|(meta, _)| meta);
+            let this_run = run.and_then(|r| {
+                r.volumes
+                    .iter()
+                    .find(|v| v.volume_key.as_deref() == Some(key))
+            });
             let table = compare::build_table(&history, node_limit).unwrap_or_else(|e| {
                 issues.push(format!("无法整理目录数据：{e}"));
                 NodeTable::default()
@@ -334,20 +501,17 @@ pub fn report_data(store: &Store, run: Option<&RunRecord>, connected: &[Volume])
                 letter: live
                     .map(|v| v.letter)
                     .or(last.map(|m| m.letter))
+                    .or(this_run.map(|v| v.letter))
                     .unwrap_or('?'),
                 label: live
                     .map(|v| v.label.clone())
                     .or(last.map(|m| m.label.clone()))
+                    .or_else(|| this_run.map(|v| v.label.clone()))
                     .unwrap_or_default(),
                 connected: live.is_some(),
                 total_bytes: live.map(|v| v.total_bytes).or(last.map(|m| m.total_bytes)),
                 free_bytes: live.map(|v| v.free_bytes).or(last.map(|m| m.free_bytes)),
-                this_run: run.and_then(|r| {
-                    r.volumes
-                        .iter()
-                        .find(|v| v.volume_key.as_deref() == Some(key))
-                        .cloned()
-                }),
+                this_run: this_run.cloned(),
                 snapshots: history.iter().map(|(meta, _)| meta.into()).collect(),
                 table,
                 file_changes,
@@ -383,7 +547,7 @@ pub fn report_data(store: &Store, run: Option<&RunRecord>, connected: &[Volume])
     volumes.sort_by_key(|v| (!v.connected, v.letter));
     ReportData {
         format: 2,
-        app_version: env!("CARGO_PKG_VERSION"),
+        app_version: env!("CARGO_PKG_VERSION").into(),
         generated_at: now_unix(),
         theme: store.load_settings().theme,
         footprint: store.footprint(),

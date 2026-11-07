@@ -48,7 +48,7 @@ pub fn pair_status(old: &SnapshotMeta, new: &SnapshotMeta) -> PairStatus {
 }
 
 /// The folders of a volume across its snapshots, parents before children.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NodeTable {
     pub names: Vec<String>,
     /// Index of the parent, -1 for the root.

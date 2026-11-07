@@ -206,7 +206,8 @@ pub fn thin_records(records: &mut Vec<ScanRecord>, now: u64) {
 }
 
 /// All of Diskly on disk right now.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Footprint {
     pub limit: u64,
     pub program: u64,
@@ -1005,6 +1006,16 @@ impl Store {
         }
         let path = self.root.join("reports").join(name);
         path.is_file().then_some(path)
+    }
+
+    /// Update our own saved report, preserving its embedded historical data.
+    pub fn refresh_report(&self, file_name: &str, html: &str) -> io::Result<PathBuf> {
+        let path = self
+            .report_path(file_name)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "report file not found"))?;
+        write_atomic(&path, html.as_bytes())?;
+        self.enforce(self.data_budget());
+        Ok(path)
     }
 
     pub fn load_settings(&self) -> Settings {

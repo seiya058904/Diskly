@@ -116,6 +116,84 @@ try {
     assert.equal(first, "Users");
   });
 
+  await check("history opens the requested scan and keeps it across disk filters", async () => {
+    await openClean("historical");
+    const chosen = await page.eval('JSON.parse(document.getElementById("diskly-data").textContent).run.scan_id');
+    assert.equal(await page.eval('document.querySelector(\'select[aria-label="比较的终点"]\').value'), chosen);
+    assert.match(await text("h1"), /4.0 GB/);
+    assert.match(await text(".hero"), /正在查看/);
+    assert.equal(await count("#largest .item"), 0, "newer file details are not shown");
+    await page.click('.segments[aria-label="选择磁盘"] button:nth-child(2)');
+    assert.equal(await page.eval('document.querySelector(\'select[aria-label="比较的终点"]\').value'), chosen);
+    assert.equal(await text("h1"), "C: 比上次多用了 3.0 GB");
+    assert.match(await text("#disks"), /已用 102 GB/);
+    await page.click('.segments[aria-label="选择磁盘"] button:nth-child(4)');
+    assert.match(await text("#disks"), /沿用/);
+    assert.equal(await page.eval('document.querySelector(\'select[aria-label="比较的终点"]\').value'), chosen);
+    await page.click('.segments[aria-label="选择磁盘"] button:nth-child(2)');
+    await page.click("#open-ai");
+    assert.match(await text("#ai-preview"), /已用 102 GB/);
+    assert.ok(!(await text("#ai-preview")).includes("已用 118 GB"));
+    await page.click("#ai-dialog .pill.quiet");
+    await page.click("#show-latest");
+    assert.equal(await text("h1"), "C: 比上次多用了 12.0 GB");
+  });
+
+  await check("a carried disk cannot disable another disk's earliest comparison", async () => {
+    await openClean("normal");
+    const earliest = await page.eval('[...document.querySelectorAll("#history button.scan")].at(-1)?.textContent');
+    assert.ok(earliest?.includes("99.0 GB") && earliest.endsWith("设为起点"));
+    await page.eval('[...document.querySelectorAll("#history button.scan")].at(-1).click()');
+    assert.match(await text("h1"), /19.0 GB/);
+  });
+
+  await check("same-second endpoints and their option labels remain distinct", async () => {
+    await openClean("same-second");
+    assert.match(await text("#disks"), /已用 102 GB/);
+    const options = await texts('select[aria-label="比较的终点"] option');
+    assert.equal(new Set(options).size, options.length);
+    await page.click("#show-latest");
+    assert.match(await text("#disks"), /已用 118 GB/);
+    assert.deepEqual(page.consoleErrors, []);
+  });
+
+  await check("format-one data still renders folders and comparisons", async () => {
+    await openClean("legacy");
+    assert.match(await text("h1"), /4.0 GB/);
+    assert.equal(await count("#largest"), 0, "old reports did not keep file insights");
+    await page.click('.segments[aria-label="选择磁盘"] button:nth-child(2)');
+    await page.eval('[...document.querySelectorAll("#folders button.folder")].find((r) => r.querySelector(".folder-name").textContent === "Windows").click()');
+    assert.equal(await text(".crumbs .here"), "Windows");
+    assert.deepEqual(page.consoleErrors, []);
+  });
+
+  await check("archived history shows a summary, with no newer map or file details", async () => {
+    await openClean("archived");
+    assert.equal(await text("h1"), "这次扫描仅保留摘要");
+    assert.match(await text("#disks"), /已用 99.0 GB/);
+    assert.equal(await count("#folders, #largest, #changes"), 0);
+    assert.ok((await texts("#history .scan")).some((s) => s.includes("仅保留摘要") && s.endsWith("终点")));
+    assert.ok(!(await text("#history .trends")).includes("118 GB"));
+    await page.click("#open-ai");
+    assert.match(await text("#ai-preview"), /已用 99.0 GB/);
+    assert.ok(!(await text("#ai-preview")).includes("ext4.vhdx"));
+    await page.click("#ai-dialog .pill.quiet");
+    await page.screenshot(join(out, "archived.png"));
+    await page.click("#show-latest");
+    assert.match(await text("#disks"), /已用 118 GB/);
+    assert.ok(await count("#folders"));
+    assert.deepEqual(page.consoleErrors, []);
+  });
+
+  await check("a run without capacity records never borrows live capacity", async () => {
+    await openClean("run-only");
+    assert.equal(await text("h1"), "这次扫描仅保留摘要");
+    assert.match(await text("#disks"), /容量未知/);
+    assert.equal(await text(".ring-center b"), "未知");
+    assert.equal(await count("#folders, #largest, .trend"), 0);
+    assert.deepEqual(page.consoleErrors, []);
+  });
+
   await check("the biggest files come first, and nothing ranks what is small", async () => {
     await openClean("normal");
     const sizes = await page.eval(`[...document.querySelectorAll("#largest .item-size")].map((e) => e.textContent)`);
@@ -358,7 +436,7 @@ try {
 
   await check("no horizontal scrolling at any width, in any state", async () => {
     await page.media({ reducedMotion: "reduce" });
-    for (const scenario of ["normal", "walk-unknown", "hostile", "engines", "first", "pruned"]) {
+    for (const scenario of ["normal", "historical", "legacy", "same-second", "archived", "run-only", "walk-unknown", "hostile", "engines", "first", "pruned"]) {
       for (const width of [1920, 1280, 900, 760, 480, 360, 320]) {
         await page.viewport(width, 800);
         await page.goto(url(scenario));

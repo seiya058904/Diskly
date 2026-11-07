@@ -9,7 +9,10 @@ use std::time::{Duration, SystemTime};
 use diskghost_core::{diff, Progress};
 use diskly_core::compare::{build_table, pair_status, NodeTable, PairStatus};
 use diskly_core::scan::{scan_root, ScanStatus};
-use diskly_core::session::{commit_run, report_data, write_report, VolumeResult};
+use diskly_core::session::{
+    commit_run, list_run_views, prepare_report, report_availability, report_data, write_report,
+    ReportAvailability, RunRecord, VolumeResult,
+};
 use diskly_core::store::{long_term_base, thin_records, ScanRecord, SnapshotMeta, Store};
 use diskly_core::volumes::{Volume, VolumeIdentity};
 
@@ -1117,4 +1120,360 @@ fn a_report_is_one_file_in_the_reports_folder() {
     );
     assert_eq!(store.report_path(r"..\settings.json"), None);
     assert_eq!(store.report_path("Diskly-missing.html"), None);
+}
+
+#[test]
+fn reopening_a_pruned_run_keeps_its_identity_and_only_its_summary() {
+    let (tree, data) = (TestDir::new("tree"), TestDir::new("data"));
+    let store = Store::open(&data.0).unwrap();
+    let v = volume(&tree.0, 'T', "g1", 1);
+    let mut first = None;
+    for i in 1..=5 {
+        tree.write(r"folder\a.bin", i * 1024);
+        let id = format!("{i:012}-a");
+        scan_and_commit(&store, &id, i as u64, &v);
+        let mut run: RunRecord = store
+            .list_runs()
+            .into_iter()
+            .find(|r: &RunRecord| r.scan_id == id)
+            .unwrap();
+        write_report(&store, &mut run, std::slice::from_ref(&v)).unwrap();
+        if i == 1 {
+            first = Some(run);
+        }
+    }
+    let mut first = first.unwrap();
+    assert_eq!(
+        report_availability(&store, &first),
+        ReportAvailability::Summary
+    );
+    // Several reports in one second may reuse a pruned filename. The embedded
+    // scan ID, not the filename alone, decides whose details it holds.
+    if let Some(path) = store.report_path(first.report_file.as_deref().unwrap()) {
+        let saved = diskly_core::report::saved_data(&fs::read_to_string(path).unwrap()).unwrap();
+        assert_ne!(saved["run"]["scan_id"], first.scan_id);
+    }
+    let path = prepare_report(&store, &mut first, &[]).unwrap();
+    let saved = diskly_core::report::saved_data(&fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(saved["run"]["scan_id"], first.scan_id);
+    assert_eq!(saved["volumes"][0]["records"][0]["id"], first.scan_id);
+    assert_eq!(saved["volumes"][0]["records"][0]["files"], 1);
+    assert_eq!(saved["run"]["volumes"][0]["bytes"], 1024);
+    assert!(saved["volumes"][0]["snapshots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|s| s["id"] != first.scan_id));
+    assert_eq!(
+        report_availability(&store, &first),
+        ReportAvailability::Summary,
+        "a saved summary is not a saved detailed report"
+    );
+    assert_eq!(
+        list_run_views(&store)
+            .into_iter()
+            .find(|r| r.run.scan_id == first.scan_id)
+            .unwrap()
+            .availability,
+        ReportAvailability::Summary
+    );
+    let footprint = store.footprint();
+    assert!(footprint.scans_kept <= 3 && footprint.reports_kept <= 3);
+}
+
+#[test]
+fn a_saved_report_preserves_details_after_the_snapshot_is_pruned() {
+    let (tree, data) = (TestDir::new("tree"), TestDir::new("data"));
+    let store = Store::open(&data.0).unwrap();
+    let v = volume(&tree.0, 'T', "g1", 1);
+    tree.write(r"leaf\image.vhdx", 1024);
+    scan_and_commit(&store, "000000000001-a", 1, &v);
+    let mut first: RunRecord = store.list_runs().remove(0);
+    assert_eq!(
+        report_availability(&store, &first),
+        ReportAvailability::Rebuildable
+    );
+    let original = write_report(&store, &mut first, std::slice::from_ref(&v)).unwrap();
+    for i in 2..=5 {
+        tree.write(r"leaf\image.vhdx", i * 1024);
+        scan_and_commit(&store, &format!("{i:012}-a"), i as u64, &v);
+    }
+    store.prune(&v.identity.key().unwrap(), 3).unwrap();
+    assert_eq!(
+        report_availability(&store, &first),
+        ReportAvailability::Saved
+    );
+    let old_html = fs::read_to_string(&original).unwrap();
+    fs::write(
+        &original,
+        old_html.replace("<title>Diskly 报告</title>", "<title>Legacy</title>"),
+    )
+    .unwrap();
+    let refreshed = prepare_report(&store, &mut first, &[]).unwrap();
+    assert_eq!(
+        refreshed, original,
+        "reopening does not consume another report slot"
+    );
+    let html = fs::read_to_string(refreshed).unwrap();
+    assert!(!html.contains("<title>Legacy</title>"));
+    let saved = diskly_core::report::saved_data(&html).unwrap();
+    assert_eq!(saved["volumes"][0]["snapshots"][0]["id"], first.scan_id);
+    assert_eq!(saved["volumes"][0]["table"]["sizes"][0][0], 1024);
+    assert_eq!(
+        saved["volumes"][0]["insights"][&first.scan_id]["files"][0]["path"],
+        r"leaf\image.vhdx"
+    );
+}
+
+#[test]
+fn a_wrong_or_damaged_cached_report_is_rebuilt_for_the_requested_run() {
+    let (tree, data) = (TestDir::new("tree"), TestDir::new("data"));
+    let store = Store::open(&data.0).unwrap();
+    let v = volume(&tree.0, 'T', "g1", 1);
+    tree.write("a.bin", 1024);
+    scan_and_commit(&store, "000000000001-a", 1, &v);
+    let mut run: RunRecord = store.list_runs().remove(0);
+    let path = write_report(&store, &mut run, std::slice::from_ref(&v)).unwrap();
+    let mut wrong = serde_json::to_value(report_data(&store, Some(&run), &[])).unwrap();
+    wrong["run"]["scan_id"] = "000000000999-wrong".into();
+    fs::write(&path, diskly_core::report::render(&wrong).unwrap()).unwrap();
+    assert_eq!(
+        report_availability(&store, &run),
+        ReportAvailability::Rebuildable
+    );
+    let correct = prepare_report(&store, &mut run, &[]).unwrap();
+    let saved = diskly_core::report::saved_data(&fs::read_to_string(&correct).unwrap()).unwrap();
+    assert_eq!(saved["run"]["scan_id"], run.scan_id);
+    fs::write(correct, "truncated").unwrap();
+    assert!(prepare_report(&store, &mut run, &[]).unwrap().is_file());
+}
+
+#[test]
+fn an_archived_disconnected_volume_is_still_in_its_run_report() {
+    let (tree, data) = (TestDir::new("tree"), TestDir::new("data"));
+    let store = Store::open(&data.0).unwrap();
+    let v = volume(&tree.0, 'T', "g1", 1);
+    tree.write("a.bin", 1024);
+    scan_and_commit(&store, "000000000001-a", 1, &v);
+    let mut run: RunRecord = store.list_runs().remove(0);
+    run.volumes[0].volume_key = Some("v-no-longer-retained".into());
+    let report = report_data(&store, Some(&run), &[]);
+    let archived = report
+        .volumes
+        .iter()
+        .find(|v| v.key.as_deref() == Some("v-no-longer-retained"))
+        .unwrap();
+    assert_eq!(archived.letter, 'T');
+    assert!(!archived.connected && archived.snapshots.is_empty() && archived.records.is_empty());
+    assert_eq!(archived.this_run.as_ref().unwrap().files, 1);
+    assert_eq!(
+        report_availability(&store, &run),
+        ReportAvailability::Summary
+    );
+    run.volumes[0].stored = false;
+    assert_eq!(report_availability(&store, &run), ReportAvailability::None);
+}
+
+#[test]
+fn reopening_recovers_partial_details_without_losing_the_cached_disk() {
+    let (tree, data) = (TestDir::new("tree"), TestDir::new("data"));
+    let store = Store::open(&data.0).unwrap();
+    tree.write("a.bin", 1024);
+    let volumes = [volume(&tree.0, 'T', "g1", 1), volume(&tree.0, 'U', "g2", 2)];
+    let results = volumes
+        .iter()
+        .map(|v| {
+            let (summary, snapshot) = scan_root(&v.root, false, &Progress::default());
+            VolumeResult {
+                volume: v.clone(),
+                summary,
+                snapshot,
+            }
+        })
+        .collect();
+    let mut run = commit_run(&store, "000000000001-a", 1, 0.1, false, results, 3);
+    let path = write_report(&store, &mut run, &volumes).unwrap();
+    let mut saved = diskly_core::report::saved_data(&fs::read_to_string(&path).unwrap()).unwrap();
+    saved["volumes"].as_array_mut().unwrap().truncate(1);
+    fs::write(&path, diskly_core::report::render(&saved).unwrap()).unwrap();
+    for i in 2..=4 {
+        tree.write("a.bin", i * 1024);
+        scan_and_commit(&store, &format!("{i:012}-a"), i as u64, &volumes[0]);
+    }
+    store.prune(&volumes[0].identity.key().unwrap(), 2).unwrap();
+    assert_eq!(
+        report_availability(&store, &run),
+        ReportAvailability::Rebuildable
+    );
+    let path = prepare_report(&store, &mut run, &volumes).unwrap();
+    let saved = diskly_core::report::saved_data(&fs::read_to_string(&path).unwrap()).unwrap();
+    for volume in saved["volumes"].as_array().unwrap() {
+        let i = volume["snapshots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|s| s["id"] == run.scan_id)
+            .unwrap();
+        assert_eq!(volume["table"]["sizes"][i][0], 1024);
+    }
+    assert_eq!(report_availability(&store, &run), ReportAvailability::Saved);
+    // A third, no-longer-retained disk makes this a partial report, not complete.
+    let mut missing = run.volumes[0].clone();
+    missing.volume_key = Some("v-missing".into());
+    run.volumes.push(missing);
+    assert_eq!(
+        report_availability(&store, &run),
+        ReportAvailability::Partial
+    );
+}
+
+#[test]
+fn a_format_one_report_keeps_its_last_copy_of_the_scan() {
+    let (tree, data) = (TestDir::new("tree"), TestDir::new("data"));
+    let store = Store::open(&data.0).unwrap();
+    let v = volume(&tree.0, 'T', "g1", 1);
+    tree.write("old.bin", 1024);
+    scan_and_commit(&store, "000000000001-a", 1, &v);
+    let mut run: RunRecord = store.list_runs().remove(0);
+    let path = write_report(&store, &mut run, std::slice::from_ref(&v)).unwrap();
+    let mut legacy = serde_json::to_value(report_data(&store, Some(&run), &[])).unwrap();
+    // The actual format-1 schema in c260f56: before footprint, theme and insights.
+    legacy["format"] = 1.into();
+    for field in ["theme", "footprint"] {
+        legacy.as_object_mut().unwrap().remove(field);
+    }
+    for volume in legacy["volumes"].as_array_mut().unwrap() {
+        for field in ["insights", "records"] {
+            volume.as_object_mut().unwrap().remove(field);
+        }
+    }
+    fs::write(&path, diskly_core::report::render(&legacy).unwrap()).unwrap();
+    for i in 2..=4 {
+        scan_and_commit(&store, &format!("{i:012}-a"), i, &v);
+    }
+    store.prune(&v.identity.key().unwrap(), 2).unwrap();
+    assert_eq!(report_availability(&store, &run), ReportAvailability::Saved);
+    let reopened = prepare_report(&store, &mut run, &[]).unwrap();
+    assert_eq!(reopened, path);
+    let saved = diskly_core::report::saved_data(&fs::read_to_string(reopened).unwrap()).unwrap();
+    assert_eq!(saved["volumes"][0]["snapshots"][0]["id"], run.scan_id);
+    assert_eq!(saved["volumes"][0]["table"]["sizes"][0][0], 1024);
+}
+
+#[test]
+fn reopening_a_summary_keeps_its_numbers_and_an_unscanned_cached_disk() {
+    let (tree, data) = (TestDir::new("tree"), TestDir::new("data"));
+    let store = Store::open(&data.0).unwrap();
+    let v = volume(&tree.0, 'T', "g1", 1);
+    tree.write("a.bin", 1024);
+    scan_and_commit(&store, "000000000001-a", 1, &v);
+    let mut run: RunRecord = store.list_runs().remove(0);
+    let path = write_report(&store, &mut run, std::slice::from_ref(&v)).unwrap();
+    let mut cached = diskly_core::report::saved_data(&fs::read_to_string(&path).unwrap()).unwrap();
+    let mut carried = cached["volumes"][0].clone();
+    carried["key"] = "v-offline".into();
+    carried["letter"] = "U".into();
+    carried["this_run"] = serde_json::Value::Null;
+    cached["volumes"][0]["snapshots"] = serde_json::json!([]);
+    cached["volumes"][0]["table"] = serde_json::to_value(NodeTable::default()).unwrap();
+    cached["volumes"].as_array_mut().unwrap().push(carried);
+    fs::write(&path, diskly_core::report::render(&cached).unwrap()).unwrap();
+    for i in 2..=4 {
+        scan_and_commit(&store, &format!("{i:012}-a"), i, &v);
+    }
+    store.prune(&v.identity.key().unwrap(), 2).unwrap();
+    fs::write(
+        data.path(&format!("records/{}.json", v.identity.key().unwrap())),
+        "[]",
+    )
+    .unwrap();
+    for _ in 0..2 {
+        let reopened = prepare_report(&store, &mut run, &[]).unwrap();
+        let saved =
+            diskly_core::report::saved_data(&fs::read_to_string(reopened).unwrap()).unwrap();
+        assert_eq!(saved["volumes"][0]["records"][0]["free"], v.free_bytes);
+        assert!(saved["volumes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v["key"] == "v-offline"));
+    }
+}
+
+#[test]
+fn invalid_cached_tables_and_damaged_snapshots_are_not_available_details() {
+    let (tree, data) = (TestDir::new("tree"), TestDir::new("data"));
+    let store = Store::open(&data.0).unwrap();
+    let v = volume(&tree.0, 'T', "g1", 1);
+    tree.write("a.bin", 1024);
+    let meta = scan_and_commit(&store, "000000000001-a", 1, &v);
+    let mut run: RunRecord = store.list_runs().remove(0);
+    let path = write_report(&store, &mut run, std::slice::from_ref(&v)).unwrap();
+    let mut cached = diskly_core::report::saved_data(&fs::read_to_string(&path).unwrap()).unwrap();
+    let mut healthy = cached["volumes"][0].clone();
+    healthy["key"] = "v-healthy".into();
+    healthy["letter"] = "U".into();
+    healthy["this_run"] = serde_json::Value::Null;
+    cached["volumes"].as_array_mut().unwrap().push(healthy);
+    // A completely malformed disk is isolated too, without rejecting the page.
+    cached["volumes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"key": "v-broken", "snapshots": "damaged"}));
+    let valid = cached["volumes"][0]["table"].clone();
+    for (field, damaged) in [
+        ("sizes", serde_json::json!([])),
+        ("parents", serde_json::json!([0])),
+        ("unread", serde_json::json!([[99]])),
+    ] {
+        cached["volumes"][0]["table"] = valid.clone();
+        cached["volumes"][0]["table"][field] = damaged;
+        fs::write(&path, diskly_core::report::render(&cached).unwrap()).unwrap();
+        assert_eq!(
+            report_availability(&store, &run),
+            ReportAvailability::Rebuildable,
+            "{field} must not be treated as usable detail"
+        );
+    }
+    fs::write(
+        data.path(&format!("history/{}/{}.dgs", meta.volume_key, meta.scan_id)),
+        "damaged",
+    )
+    .unwrap();
+    assert_eq!(
+        report_availability(&store, &run),
+        ReportAvailability::Summary
+    );
+    let reopened = prepare_report(&store, &mut run, &[]).unwrap();
+    let saved = diskly_core::report::saved_data(&fs::read_to_string(reopened).unwrap()).unwrap();
+    assert!(saved["volumes"][0]["snapshots"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(saved["volumes"][0]["records"][0]["id"], run.scan_id);
+    let volumes = saved["volumes"].as_array().unwrap();
+    assert_eq!(volumes.len(), 2);
+    let healthy = volumes.iter().find(|v| v["key"] == "v-healthy").unwrap();
+    assert_eq!(healthy["table"]["sizes"][0][0], 1024);
+}
+
+#[test]
+fn refreshing_an_old_report_under_budget_pressure_keeps_the_opened_page() {
+    let data = TestDir::new("data");
+    let store = Store::open(&data.0).unwrap();
+    let budget = store.data_budget() as usize;
+    let size = budget / 3 - 100;
+    let first = data.path("reports/Diskly-0001.html");
+    fs::write(&first, "a".repeat(size)).unwrap();
+    for name in ["Diskly-0002.html", "Diskly-0003.html"] {
+        fs::write(data.path(&format!("reports/{name}")), "b".repeat(size)).unwrap();
+    }
+    let html = "c".repeat(size + 1000);
+    let refreshed = store.refresh_report("Diskly-0001.html", &html).unwrap();
+    assert!(
+        refreshed.is_file(),
+        "budget enforcement removed the page being opened"
+    );
+    assert_eq!(fs::read_to_string(refreshed).unwrap(), html);
+    assert!(diskly_core::store::folder_size(&data.0) <= budget as u64);
 }

@@ -6,6 +6,7 @@
 //   basic         a normal scan, a change, a second scan, cancel, history, settings,
 //                 and what it all takes on disk
 //   browser       a normal scan that opens its report in the real default browser
+//   history       history availability with synthetic runs; pass demo pages as arg 4
 //   uac-accept    two fast scans: answer YES to both Windows prompts
 //   uac-decline   a fast scan: answer NO to the Windows prompt
 //   uac-slow      a fast scan: wait 30 seconds, then answer YES
@@ -18,7 +19,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connectToPage, fileUrl, launchBrowser } from "./cdp.mjs";
 
-const [exe, work, phase] = process.argv.slice(2);
+const [exe, work, phase, demoPages] = process.argv.slice(2);
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "..", "..");
 const lib = createRequire(import.meta.url)(join(repo, "report", "lib.js"));
@@ -151,6 +152,50 @@ async function setScanMode(mode) {
 }
 
 /* ---- Phases ---- */
+
+function seedHistory() {
+  assert.ok(demoPages, "history needs the folder from build-demo.ps1");
+  const html = readFileSync(join(demoPages, "normal.html"), "utf8");
+  const data = JSON.parse(html.match(/<script type="application\/json" id="diskly-data">([\s\S]*?)<\/script>/)[1]);
+  const saved = { ...data.run, report_file: "Diskly-history-saved.html" };
+  const legacyHtml = readFileSync(join(demoPages, "legacy.html"), "utf8");
+  const legacyData = JSON.parse(legacyHtml.match(/<script type="application\/json" id="diskly-data">([\s\S]*?)<\/script>/)[1]);
+  const legacy = { ...legacyData.run, report_file: "Diskly-history-legacy.html" };
+  const summary = { ...data.run, scan_id: "000000000100-summary", started_at: 100, report_file: "Diskly-history-pruned.html" };
+  const cancelled = { ...data.run, scan_id: "000000000200-cancelled", started_at: 200, report_file: null,
+    volumes: data.run.volumes.map((v) => ({ ...v, stored: false, status: "cancelled" })) };
+  mkdirSync(join(dataDir, "runs"), { recursive: true });
+  mkdirSync(join(dataDir, "reports"), { recursive: true });
+  assert.equal(runs().length, 0, "use a fresh work folder for history");
+  for (const run of [saved, legacy, summary, cancelled]) writeFileSync(join(dataDir, "runs", `${run.scan_id}.json`), JSON.stringify(run));
+  writeFileSync(join(dataDir, "reports", saved.report_file), html);
+  writeFileSync(join(dataDir, "reports", legacy.report_file), legacyHtml);
+}
+
+async function historyAvailability() {
+  const openHistory = async () => {
+    await page.eval('[...document.querySelectorAll(".text-button")].find((b) => b.textContent === "历史").click()');
+    await page.waitFor('document.querySelector("#view .row-detail")');
+  };
+  await check("history recognizes both report formats, archived summaries and cancelled runs", async () => {
+    const list = await page.eval('window.__TAURI__.core.invoke("list_runs")');
+    assert.deepEqual(list.map((r) => r.availability), ["saved", "saved", "none", "summary"]);
+    await openHistory();
+    assert.match(await screen(), /报告已保存/);
+    assert.match(await screen(), /仅保留摘要/);
+    assert.equal(await page.eval('document.querySelectorAll("#view button.row").length'), 3);
+    assert.equal(await page.eval('[...document.querySelectorAll("#view div.row")].filter((r) => r.textContent.includes("已取消")).length'), 1);
+    capture("history-availability");
+  });
+  await check("history recomputes availability when a saved report is removed", async () => {
+    rmSync(join(dataDir, "reports", "Diskly-history-saved.html"));
+    await page.click('.back');
+    await openHistory();
+    assert.equal(await page.eval('[...document.querySelectorAll("#view .row-detail")].filter((r) => r.textContent.includes("报告已保存")).length'), 1, "the legacy report remains available");
+    assert.equal(await page.eval('[...document.querySelectorAll("#view .row-detail")].filter((r) => r.textContent.includes("仅保留摘要")).length'), 2);
+    assert.deepEqual(page.consoleErrors, []);
+  });
+}
 
 async function basic() {
   removeKnownFiles();
@@ -480,8 +525,10 @@ async function browserFlow() {
 /* ---- Run ---- */
 
 try {
+  if (phase === "history") seedHistory();
   await openApp(phase === "browser" ? { DISKLY_NO_BROWSER: undefined } : {});
   if (phase === "basic") await basic();
+  else if (phase === "history") await historyAvailability();
   else if (phase === "browser") await browserFlow();
   else if (phase === "uac-accept") await uacAccept();
   else if (phase === "uac-decline") await uacDecline();
@@ -490,7 +537,7 @@ try {
 } finally {
   page?.close();
   app?.kill();
-  removeKnownFiles();
+  if (phase !== "history") removeKnownFiles();
 }
 
 const failed = results.filter((r) => r.startsWith("FAIL")).length;

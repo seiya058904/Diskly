@@ -96,6 +96,8 @@ const DisklyLib = (() => {
     "same-scan": "这两个时间之间，它没有新的扫描。",
     pruned: "这块磁盘文件太多，上一次的完整快照放不进 Diskly 的占用上限，所以这次只能看总量变化。",
     order: "起点要早于终点，请重新选择。",
+    archived: "这次扫描的目录和文件详情已清理或不可用，只能查看保留的摘要。",
+    "archived-base": "所选起点的目录详情已不可用，不能计算这段时间的目录变化。",
   };
 
   function reasonText(reason) {
@@ -499,37 +501,84 @@ const DisklyLib = (() => {
 
   /* ---- What to compare ---- */
 
-  /* For each volume: which two scans to compare. Without choices it is the newest
-     scan against the newest comparable one before it. A chosen scan is matched by
-     time, because each volume has its own scans. */
-  function resolvePairs(volumes, fromId, toId) {
+  function recordSnapshot(record) {
+    return {
+      id: record.id, taken_at: record.at, letter: record.letter, engine: record.engine,
+      total_bytes: record.total ?? null, free_bytes: record.free ?? null,
+      files: record.files ?? null, dirs: record.dirs ?? null, summary_only: true,
+    };
+  }
+
+  /* Exact IDs win, including two scans in the same second. If details were
+     pruned, the matching record wins over an older snapshot. Only a volume not
+     scanned at the requested time may carry an earlier result forward. */
+  function selectScan(volume, id, run) {
+    const snapshots = volume.snapshots;
+    const records = (volume.records || []).filter((r) => Number.isFinite(r.at));
+    const exact = snapshots.findIndex((s) => s.id === id);
+    if (exact >= 0) return { b: exact, summary: null, carried: false };
+    const record = records.find((r) => r.id === id);
+    if (record) return { b: -1, summary: recordSnapshot(record), carried: false };
+    const ownRun = run && run.scan_id === id
+      ? run.volumes.find((v) => volume.key ? v.volume_key === volume.key : !v.volume_key && v.letter === volume.letter)
+      : null;
+    if (ownRun && (ownRun.stored || ownRun.status === "complete")) {
+      return { b: -1, carried: false, summary: {
+        id, taken_at: run.started_at, letter: ownRun.letter, engine: ownRun.engine,
+        files: ownRun.files, dirs: null, total_bytes: null, free_bytes: null, summary_only: true,
+      } };
+    }
+    const time = run && run.scan_id === id ? run.started_at : Number(String(id).split("-")[0]);
+    const candidates = [
+      ...snapshots.map((s, b) => ({ id: s.id, at: s.taken_at, b, summary: null })),
+      ...records.filter((r) => !snapshots.some((s) => s.id === r.id)).map((r) => ({ id: r.id, at: r.at, b: -1, summary: recordSnapshot(r) })),
+    ].filter((s) => !id || s.at < time).sort((a, b) => b.at - a.at || b.id.localeCompare(a.id));
+    const selected = candidates[0];
+    return selected ? { b: selected.b, summary: selected.summary, carried: Boolean(id) } : { b: -1, summary: null, carried: false };
+  }
+
+  function selectedSnapshot(pair) {
+    return pair.b >= 0 ? pair.volume.snapshots[pair.b] : pair.summary || null;
+  }
+
+  /* Trend/forecast data must stop at the selected result too. */
+  function recordsThrough(volume, snapshot) {
+    if (!snapshot) return [];
+    const records = volume.records?.length ? volume.records
+      : volume.snapshots.map((s) => ({ id: s.id, at: s.taken_at, total: s.total_bytes, free: s.free_bytes }));
+    const exact = records.findIndex((r) => r.id === snapshot.id);
+    if (exact >= 0) return records.slice(0, exact + 1);
+    const earlier = records.filter((r) => r.at < snapshot.taken_at);
+    if (snapshot.total_bytes != null && snapshot.free_bytes != null) earlier.push({
+      id: snapshot.id, at: snapshot.taken_at, total: snapshot.total_bytes, free: snapshot.free_bytes,
+      engine: snapshot.engine, serial: snapshot.serial, top: [], unread_top: null,
+    });
+    return earlier;
+  }
+
+  function resolvePairs(volumes, fromId, toId, run = null) {
     return volumes.map((volume) => {
       const snapshots = volume.snapshots;
-      if (!snapshots.length) return { volume, a: -1, b: -1, reason: "none" };
-      const position = (id) => {
-        const time = Number(String(id).split("-")[0]);
-        let found = -1;
-        snapshots.forEach((s, i) => {
-          if (s.taken_at <= time) found = i;
-        });
-        return found;
-      };
-      const b = toId ? position(toId) : snapshots.length - 1;
-      if (b < 0) return { volume, a: -1, b: -1, reason: "none" };
+      const selection = selectScan(volume, toId, run);
+      const { b } = selection;
+      const result = (a, reason) => ({ volume, ...selection, a, reason });
+      if (b < 0) return result(-1, selection.summary ? "archived" : "none");
       /* Nothing to compare with: because this is the start, or because it had to go. */
       const alone = (volume.records?.length || 0) > snapshots.length && snapshots.length === 1 ? "pruned" : "first";
       if (fromId) {
-        const a = position(fromId);
-        if (a < 0 || b === 0) return { volume, a: -1, b, reason: alone };
-        if (a === b) return { volume, a: -1, b, reason: "same-scan" };
-        if (a > b) return { volume, a: -1, b, reason: "order" };
+        const start = selectScan(volume, fromId, run);
+        const a = start.b;
+        if (start.summary) return result(-1, "archived-base");
+        if (a < 0) return result(-1, alone);
+        if (a === b) return result(-1, "same-scan");
+        if (a > b) return result(-1, "order");
         const status = pairStatus(snapshots[a], snapshots[b]);
-        return { volume, a, b, reason: status.reason };
+        return result(a, status.reason);
       }
       const a = previousComparable(snapshots, b);
-      if (a >= 0) return { volume, a, b, reason: null };
-      if (b === 0) return { volume, a: -1, b, reason: alone };
-      return { volume, a: b - 1, b, reason: pairStatus(snapshots[b - 1], snapshots[b]).reason };
+      if (a >= 0) return result(a, null);
+      if (b === 0) return result(-1, alone);
+      return result(b - 1, pairStatus(snapshots[b - 1], snapshots[b]).reason);
     });
   }
 
@@ -550,6 +599,7 @@ const DisklyLib = (() => {
     const compared = pairs.filter((p) => p.cmp);
     const letters = (list) => list.map((p) => `${p.volume.letter}:`).join("、");
     if (!compared.length) {
+      if (pairs.some((p) => p.summary)) return { title: pairs.some((p) => p.b >= 0) ? "部分磁盘仅保留摘要" : "这次扫描仅保留摘要", detail: reasonText("archived") };
       const scanned = pairs.filter((p) => p.b >= 0);
       if (!scanned.length) {
         return { title: "还没有可显示的扫描", detail: "回到 Diskly 点“扫描”，开始第一次扫描。" };
@@ -716,11 +766,22 @@ const DisklyLib = (() => {
 
     for (const pair of pairs) {
       const { volume, b } = pair;
-      if (b < 0) continue;
-      const snap = volume.snapshots[b];
+      const snap = selectedSnapshot(pair);
+      if (!snap) continue;
       out.push(`【${snap.letter}: 盘】`);
+      if (b < 0) {
+        out.push(`所选扫描：${formatDate(snap.taken_at)}，仅保留摘要。`);
+        if (snap.total_bytes != null && snap.free_bytes != null) out.push(`已用 ${formatBytes(snap.total_bytes - snap.free_bytes)}，共 ${formatBytes(snap.total_bytes)}，可用 ${formatBytes(snap.free_bytes)}。`);
+        else out.push("这次扫描的容量记录已不可用，不能用当前容量代替。");
+        if (snap.files != null) out.push(`${formatCountOf(snap.files, "个文件")}。`);
+        out.push(reasonText("archived"));
+        if (pair.carried) out.push("所选时间没有这块盘的新结果，以上是此前保留的摘要。");
+        out.push("");
+        continue;
+      }
       out.push(`已用 ${formatBytes(snap.total_bytes - snap.free_bytes)}，共 ${formatBytes(snap.total_bytes)}，可用 ${formatBytes(snap.free_bytes)}。${snap.file_system || ""}。`);
-      out.push(`最新扫描：${formatDate(snap.taken_at)}，${engineName(snap.engine)}，${formatCountOf(snap.files, "个文件")}，${formatCountOf(snap.dirs, "个目录")}。`);
+      out.push(`所选扫描：${formatDate(snap.taken_at)}，${engineName(snap.engine)}，${formatCountOf(snap.files, "个文件")}，${formatCountOf(snap.dirs, "个目录")}。`);
+      if (pair.carried) out.push("所选时间没有这块盘的新结果，以上是此前完成的扫描。");
       const insights = volume.insights?.[snap.id];
       if (insights) {
         if (insights.kinds.length) {
@@ -807,8 +868,10 @@ const DisklyLib = (() => {
     pathOf,
     previousComparable,
     rangeLabel,
+    recordsThrough,
     reasonText,
     resolvePairs,
+    selectedSnapshot,
     sizeHotspots,
     squarify,
     withComparisons,

@@ -16,7 +16,7 @@
   const ui = {
     filter: "all", /* a volume key, or "all" */
     from: null,
-    to: null,
+    to: data.run?.scan_id || null,
     /* Which volume and folder the map shows; null: the list of disks. */
     browse: null,
     sort: "size",
@@ -205,7 +205,7 @@
 
   function currentPairs() {
     const key = `${ui.filter}|${ui.from}|${ui.to}`;
-    if (!pairCache.has(key)) pairCache.set(key, L.withComparisons(L.resolvePairs(shownVolumes(), ui.from, ui.to)));
+    if (!pairCache.has(key)) pairCache.set(key, L.withComparisons(L.resolvePairs(shownVolumes(), ui.from, ui.to, data.run)));
     return pairCache.get(key);
   }
 
@@ -216,7 +216,26 @@
         if (!seen.has(snap.id)) seen.set(snap.id, snap.taken_at);
       }
     }
-    return [...seen.entries()].map(([id, at]) => ({ id, at })).sort((a, b) => b.at - a.at);
+    if (data.run) seen.set(data.run.scan_id, data.run.started_at);
+    // A disk filter must not silently reset an explicitly selected time.
+    for (const id of [ui.from, ui.to].filter(Boolean)) {
+      if (!seen.has(id)) {
+        const snap = data.volumes.flatMap((v) => v.snapshots).find((s) => s.id === id);
+        if (snap) seen.set(id, snap.taken_at);
+      }
+    }
+    const choices = [...seen.entries()].map(([id, at]) => ({ id, at })).sort((a, b) => b.at - a.at || b.id.localeCompare(a.id));
+    const minutes = new Map();
+    for (const choice of choices) {
+      const label = L.formatDate(choice.at);
+      if (!minutes.has(label)) minutes.set(label, []);
+      minutes.get(label).push(choice.id);
+    }
+    return choices.map((choice) => {
+      const label = L.formatDate(choice.at);
+      const sameMinute = minutes.get(label);
+      return { ...choice, label: sameMinute.length > 1 ? `${label}（本分钟第 ${sameMinute.length - sameMinute.indexOf(choice.id)} 次）` : label };
+    });
   }
 
   /* A disk keeps its color whatever is filtered. */
@@ -319,8 +338,6 @@
 
   function setFilter(filter) {
     ui.filter = filter;
-    ui.from = null;
-    ui.to = null;
     ui.browse = null;
     ui.kind = null;
     ui.showAllGrew = false;
@@ -365,13 +382,26 @@
 
   function renderHero(pairs) {
     const adjacent = !ui.from;
-    const line = L.headline(pairs, { adjacent });
+    const at = ui.to ? scanChoices().find((s) => s.id === ui.to)?.at : data.generated_at;
+    const line = L.headline(pairs, { adjacent, now: at || data.generated_at });
     const hero = el("div", { class: "hero" },
       placed(el("h1", { text: line.title }), 0),
       placed(el("p", { text: line.detail }), 1));
+    if (ui.to) {
+      hero.append(el("p", { class: "section-hint", text: `正在查看 ${L.formatDate(at || data.run?.started_at || data.generated_at)} 的扫描。` }));
+      const newer = data.volumes.some((v) => {
+        const selected = v.snapshots.findIndex((s) => s.id === ui.to);
+        return v.snapshots.some((s, i) => s.taken_at > at || (s.taken_at === at && selected >= 0 && i > selected));
+      });
+      if (newer) {
+        hero.append(el("button", { type: "button", class: "pill quiet press", id: "show-latest", text: "查看报告内最新结果", onclick: () => {
+          ui.to = null; ui.from = null; ui.browse = null; render();
+        } }));
+      }
+    }
     const choices = scanChoices();
     if (choices.length >= 2) {
-      const option = (c) => el("option", { value: c.id, text: L.formatDate(c.at) });
+      const option = (c) => el("option", { value: c.id, text: c.label });
       const from = el("select", {
         "aria-label": "比较的起点",
         onchange: (e) => { ui.from = e.target.value === "previous" ? null : e.target.value; ui.browse = null; render(); },
@@ -390,7 +420,7 @@
 
   function runNotice() {
     const notes = [];
-    const run = data.run;
+    const run = ui.to === data.run?.scan_id ? data.run : null;
     if (run && run.consent_declined) notes.push("没有获得管理员权限，这次用了普通扫描。部分系统目录读不到，它们标为“未知”，不计入变化。");
     if (run) {
       for (const v of run.volumes) {
@@ -416,13 +446,13 @@
     const settle = [];
     shown.forEach((pair, i) => {
       const { volume, cmp, b } = pair;
-      const snap = b >= 0 ? volume.snapshots[b] : null;
-      const total = snap ? snap.total_bytes : volume.total_bytes;
-      const free = snap ? snap.free_bytes : volume.free_bytes;
+      const snap = L.selectedSnapshot(pair);
+      const total = snap?.total_bytes;
+      const free = snap?.free_bytes;
       const r = RING_BOX / 2 - width / 2 - 1 - i * (width + gap);
       const circle = (cls) => svgEl("circle", { class: cls, cx: RING_BOX / 2, cy: RING_BOX / 2, r, "stroke-width": width, pathLength: 100 });
       root.append(circle("ring-track"));
-      if (!total) return;
+      if (!total || free == null) return;
       const usedAll = percent(total - free, total);
       const grew = cmp && cmp.usedDelta > 0 ? percent(cmp.usedDelta, total) : 0;
       const base = usedAll - grew;
@@ -444,29 +474,29 @@
     if (calm()) settle.forEach((go) => go());
     else requestAnimationFrame(() => requestAnimationFrame(() => settle.forEach((go) => go())));
 
-    const known = pairs.filter((p) => (p.b >= 0 ? p.volume.snapshots[p.b].total_bytes : p.volume.total_bytes));
+    const known = pairs.filter((p) => L.selectedSnapshot(p)?.total_bytes && L.selectedSnapshot(p)?.free_bytes != null);
     const usedOf = (p) => {
-      const snap = p.b >= 0 ? p.volume.snapshots[p.b] : null;
-      return (snap ? snap.total_bytes - snap.free_bytes : p.volume.total_bytes - p.volume.free_bytes);
+      const snap = L.selectedSnapshot(p);
+      return snap.total_bytes - snap.free_bytes;
     };
-    const totalOf = (p) => (p.b >= 0 ? p.volume.snapshots[p.b].total_bytes : p.volume.total_bytes);
+    const totalOf = (p) => L.selectedSnapshot(p).total_bytes;
     const used = known.reduce((sum, p) => sum + usedOf(p), 0);
     const whole = known.reduce((sum, p) => sum + totalOf(p), 0);
     const one = known.length === 1;
     const format = one ? (v) => `${Math.round(v)}%` : L.formatBytes;
     const value = one ? percent(used, whole) : used;
-    const number = el("b", { text: format(value) });
-    if (opening) countUp(number, value, format);
+    const number = el("b", { text: known.length ? format(value) : "未知" });
+    if (opening && known.length) countUp(number, value, format);
     return el("div", { class: "rings" }, root,
       el("div", { class: "ring-center" }, number, el("span", { text: one ? "已用" : "共已用" })));
   }
 
   function diskRow(pair) {
     const { volume, cmp, reason, b } = pair;
-    const snap = b >= 0 ? volume.snapshots[b] : null;
-    const total = snap ? snap.total_bytes : volume.total_bytes;
-    const free = snap ? snap.free_bytes : volume.free_bytes;
-    const label = volume.label || "本地磁盘";
+    const snap = L.selectedSnapshot(pair);
+    const total = snap?.total_bytes;
+    const free = snap?.free_bytes;
+    const label = snap?.label || volume.label || "本地磁盘";
 
     const top = el("div", { class: "disk-top" },
       colored(el("span", { class: "disk-dot", "aria-hidden": "true" }), volume.connected ? diskColor(volume) : "var(--neutral)"),
@@ -478,11 +508,11 @@
       changeText = `和 ${L.formatDay(cmp.snapA.taken_at)} 相比 ${L.formatDelta(cmp.usedDelta)}`;
     } else {
       const once = volume.connected ? "第一次扫描" : "只扫描过一次";
-      top.append(el("span", { class: "disk-change none", text: reason === "first" ? once : "没有可比的历史" }));
+      top.append(el("span", { class: "disk-change none", text: pair.summary ? "仅保留摘要" : reason === "first" ? once : "没有可比的历史" }));
     }
 
     const rail = colored(el("div", { class: "rail", "aria-hidden": "true" }), volume.connected ? diskColor(volume) : "var(--neutral)");
-    if (total) {
+    if (total && free != null) {
       const used = total - free;
       const pct = (x) => `${Math.max(0, percent(x, total)).toFixed(2)}%`;
       const usedBar = el("span", { class: "used" });
@@ -503,10 +533,14 @@
     }
 
     const facts = el("div", { class: "disk-facts" },
-      el("span", { text: total ? `已用 ${L.formatBytes(total - free)}，共 ${L.formatBytes(total)}` : "容量未知" }),
+      el("span", { text: total && free != null ? `已用 ${L.formatBytes(total - free)}，共 ${L.formatBytes(total)}` : "容量未知" }),
       el("span", { text: total ? `可用 ${L.formatBytes(free)}` : "" }));
 
     const notes = [];
+    if (pair.carried && snap) notes.push(el("p", { class: "disk-note", text: `所选时间没有新的结果，沿用 ${L.formatDate(snap.taken_at)} 的${pair.summary ? "摘要" : "扫描"}。` }));
+    if (pair.summary) {
+      notes.push(el("p", { class: "disk-note calm", text: `${L.formatDate(snap.taken_at)}${snap.files != null ? `，${L.formatCountOf(snap.files, "个文件")}` : ""}${snap.dirs != null ? `，${L.formatCountOf(snap.dirs, "个目录")}` : ""}。` }));
+    }
     if (!volume.connected) notes.push(el("p", { class: "disk-note", text: snap ? `本次未连接。这是 ${L.formatDate(snap.taken_at)} 的结果。` : "本次未连接。" }));
     if (!cmp && reason && reason !== "first" && reason !== "none") notes.push(el("p", { class: "disk-note", text: L.reasonText(reason) }));
     if (cmp && cmp.unknownTop > 0) notes.push(el("p", { class: "disk-note calm", text: `${cmp.unknownTop} 个目录未能读取，不计入变化。` }));
@@ -1381,8 +1415,10 @@
 
   /* ---- The long view ---- */
 
-  function trendChart(volume) {
-    const points = (volume.records?.length ? volume.records : volume.snapshots.map((s) => ({ at: s.taken_at, total: s.total_bytes, free: s.free_bytes })));
+  function trendChart(pair) {
+    const { volume } = pair;
+    const selected = L.selectedSnapshot(pair);
+    const points = L.recordsThrough(volume, selected);
     const used = points.map((p) => p.total - p.free);
     const low = Math.min(...used);
     const high = Math.max(...used);
@@ -1408,7 +1444,7 @@
     const cross = svgEl("line", { class: "trend-cross", y1: 0, y2: H, visibility: "hidden" });
     chart.append(cross);
 
-    const forecast = L.forecast(points, data.generated_at);
+    const forecast = L.forecast(points, selected.taken_at);
     const speed = L.forecastLine(volume.letter, forecast);
     const box = colored(el("div", { class: "trend" },
       el("h3", { text: `${volume.letter}: 已用空间 ${L.formatBytes(used[used.length - 1])}` }),
@@ -1418,10 +1454,10 @@
         el("span", { text: dayOf(first) }),
         el("span", { text: `${dayOf(last)}，${points.length} 条记录` }))), diskColor(volume));
 
-    const longView = L.longTerm(volume.records);
+    const longView = L.longTerm(points);
     if (longView) {
       box.append(el("div", { class: "trend-rows" },
-        el("p", { text: `从 ${dayOf(longView.from)} 到现在，顶层目录变化最多的是：` }),
+        el("p", { text: `从 ${dayOf(longView.from)} 到 ${dayOf(selected.taken_at)}，顶层目录变化最多的是：` }),
         ...longView.rows.map((row) => el("div", { class: "trend-row" },
           el("span", { text: row.name, title: row.name }),
           el("span", { text: L.formatDelta(row.delta) })))));
@@ -1451,21 +1487,25 @@
     const volumes = shownVolumes().filter((v) => v.snapshots.length || v.records?.length);
     if (!volumes.length) return null;
     const choices = scanChoices();
-    /* Only scans really being compared are marked: a disk seen once has neither. */
+    /* The selected result remains the endpoint even when it is only a summary. */
     const compared = pairs.filter((p) => p.cmp);
     const fromIds = new Set(compared.map((p) => p.cmp.snapA.id));
-    const toIds = new Set(compared.map((p) => p.cmp.snapB.id));
+    const toIds = new Set(ui.to ? [ui.to] : compared.map((p) => p.cmp.snapB.id));
     const rows = choices.map((choice) => {
       const parts = [];
       for (const volume of volumes) {
         const snap = volume.snapshots.find((s) => s.id === choice.id);
         if (snap) parts.push(`${snap.letter}: ${L.formatBytes(snap.total_bytes - snap.free_bytes)}，${L.engineName(snap.engine)}`);
+        else {
+          const summary = pairs.find((p) => p.volume === volume && p.summary?.id === choice.id)?.summary;
+          if (summary) parts.push(`${summary.letter}: 仅保留摘要${summary.total_bytes && summary.free_bytes != null ? `，已用 ${L.formatBytes(summary.total_bytes - summary.free_bytes)}` : ""}`);
+        }
       }
       const isFrom = fromIds.has(choice.id);
       const isTo = toIds.has(choice.id);
       const role = isTo ? "终点" : isFrom ? "起点" : choices.length > 1 ? "设为起点" : "";
       const cells = [
-        el("span", { text: L.formatDate(choice.at) }),
+        el("span", { text: choice.label }),
         el("span", { class: "scan-disks", text: parts.join("；") }),
         el("span", { class: isFrom || isTo ? "scan-role on" : "scan-role", text: role }),
       ];
@@ -1473,7 +1513,7 @@
       return el("button", {
         type: "button",
         class: "scan row",
-        "aria-label": `和 ${L.formatDate(choice.at)} 的扫描比较`,
+        "aria-label": `和 ${choice.label} 的扫描比较`,
         onclick: () => {
           ui.from = choice.id;
           ui.browse = null;
@@ -1482,7 +1522,7 @@
         },
       }, ...cells);
     });
-    const trends = volumes.filter((v) => (v.records?.length ? v.records.length : v.snapshots.length) >= 3);
+    const trends = pairs.filter((p) => L.recordsThrough(p.volume, L.selectedSnapshot(p)).length >= 3);
     return el("section", { id: "history" },
       el("h2", { text: "长期趋势和历史" }),
       trends.length ? el("div", { class: "trends" }, ...trends.map(trendChart)) : null,
@@ -1495,9 +1535,10 @@
     const { volume, cmp, b } = pair;
     if (b < 0) {
       const run = volume.this_run;
+      const summary = pair.summary;
       return el("details", {},
-        el("summary", { class: "row" }, el("span", { class: "title", text: `${volume.letter}:` }), el("span", { class: "sub", text: "没有可用的扫描结果" }), chevron()),
-        el("div", { class: "detail-body" }, el("p", { text: run && run.error ? run.error : "这个卷还没有完成过扫描。" })));
+        el("summary", { class: "row" }, el("span", { class: "title", text: `${summary?.letter || volume.letter}:` }), el("span", { class: "sub", text: summary ? "仅保留扫描摘要" : "所选时间没有可用的结果" }), chevron()),
+        el("div", { class: "detail-body" }, el("p", { text: summary ? `${L.formatDate(summary.taken_at)}。${L.reasonText("archived")}` : run && run.error ? run.error : "没有这个时间或更早的可用扫描，不会用较新的结果代替。" })));
     }
     const snap = volume.snapshots[b];
     const table = volume.table;

@@ -408,12 +408,79 @@ test("a chosen scan is matched by time for each volume", () => {
   assert.equal(same.a, -1, "a scan is not compared with itself");
   assert.equal(same.reason, "same-scan");
   const [reversed] = lib.resolvePairs([volume], "000000000300-c", "000000000100-a");
-  assert.equal(reversed.reason, "first", "nothing is earlier than the first scan");
+  assert.equal(reversed.reason, "order", "the start is later even when the end is the first scan");
   const [backwards] = lib.resolvePairs([volume], "000000000300-c", "000000000200-b");
   assert.equal(backwards.reason, "order");
 });
 
 /* ---- Where it happened ---- */
+
+test("exact scan IDs win over timestamps, even within the same second", () => {
+  const snapshots = [snap("000000000100-a"), snap("000000000100-b"), snap("000000000200-c")];
+  const v = volumeOf([["x", 1, 2, 9]], { snapshots });
+  const [pair] = lib.withComparisons(lib.resolvePairs([v], null, snapshots[0].id));
+  assert.equal(pair.b, 0);
+  assert.equal(pair.cmp, null);
+  assert.equal(pair.carried, false);
+  assert.equal(lib.resolvePairs([v], null, snapshots[1].id)[0].b, 1);
+  assert.equal(lib.resolvePairs([v], null, "000000000100-other")[0].b, -1, "same-second unrelated scans are not assumed earlier");
+});
+
+test("an archived run shows its own summary, never the newest details", () => {
+  const v = volumeOf([["future", 9]], { snapshots: [snap("000000000300-c")] });
+  v.records = [
+    { id: "000000000100-a", at: 100, letter: "C", engine: "mft", total: 500 * GB, free: 490 * GB, files: 3, dirs: 1 },
+    { id: "000000000300-c", at: 300, letter: "C", engine: "mft", total: 500 * GB, free: 300 * GB, files: 30, dirs: 10 },
+  ];
+  const [pair] = lib.withComparisons(lib.resolvePairs([v], null, v.records[0].id));
+  assert.equal(pair.b, -1);
+  assert.equal(pair.reason, "archived");
+  assert.equal(pair.cmp, null);
+  assert.equal(lib.selectedSnapshot(pair).files, 3);
+  const text = lib.buildPrompt([pair]);
+  assert.match(text, /摘要/);
+  assert.match(text, /10.0 GB/);
+  assert.ok(!text.includes("future") && !text.includes("200 GB"));
+  assert.equal(lib.resolvePairs([v], v.records[0].id, v.snapshots[0].id)[0].reason, "archived-base");
+  const full = volumeOf([["kept", 1]], { snapshots: [snap(v.records[0].id)] });
+  const mixed = [pair, ...lib.withComparisons(lib.resolvePairs([full], null, v.records[0].id))];
+  assert.equal(lib.headline(mixed).title, "部分磁盘仅保留摘要");
+});
+
+test("a run still has a summary when even its long-term record is gone", () => {
+  const v = volumeOf([["future", 9]], { snapshots: [snap("000000000300-c")] });
+  const run = { scan_id: "000000000100-a", started_at: 100, volumes: [{ volume_key: v.key, letter: "C", stored: true, status: "complete", engine: "mft", files: 3 }] };
+  const [pair] = lib.withComparisons(lib.resolvePairs([v], null, run.scan_id, run));
+  assert.equal(pair.b, -1);
+  assert.equal(pair.summary.files, 3);
+  assert.equal(pair.summary.free_bytes, null, "live free space must not fill a historical gap");
+  assert.match(lib.buildPrompt([pair]), /容量记录已不可用/);
+  assert.equal(lib.resolvePairs([v], null, null, run)[0].b, 0, "latest is an explicit different choice");
+});
+
+test("an unscanned disk carries only an earlier result and labels it", () => {
+  const v = volumeOf([["x", 1, 9]], { snapshots: [snap("000000000100-a"), snap("000000000300-c")] });
+  const [pair] = lib.withComparisons(lib.resolvePairs([v], null, "000000000200-b"));
+  assert.equal(pair.b, 0);
+  assert.equal(pair.carried, true);
+  assert.match(lib.buildPrompt([pair]), /此前完成的扫描/);
+});
+
+test("historical trends stop at the selected ID, not a later scan in that second", () => {
+  const v = volumeOf([], { snapshots: [snap("000000000100-a"), snap("000000000100-b")] });
+  v.records = [{ id: "older", at: 50 }, { id: v.snapshots[0].id, at: 100 }, { id: v.snapshots[1].id, at: 100 }, { id: "newer", at: 200 }];
+  assert.deepEqual(lib.recordsThrough(v, v.snapshots[0]).map((r) => r.id), ["older", v.snapshots[0].id]);
+  assert.deepEqual(lib.recordsThrough(v, { id: "missing", taken_at: 100 }).map((r) => r.id), ["older"]);
+});
+
+test("a thinned trend still ends at the selected snapshot's known capacity", () => {
+  const v = volumeOf([], { snapshots: [snap("000000000100-a")] });
+  v.records = [{ id: "older", at: 50, total: 500 * GB, free: 400 * GB }, { id: "future", at: 200, total: 500 * GB, free: 1 }];
+  const points = lib.recordsThrough(v, v.snapshots[0]);
+  assert.deepEqual(points.map((r) => r.id), ["older", v.snapshots[0].id]);
+  assert.equal(points[1].free, 300 * GB);
+  assert.equal(lib.longTerm(points), null, "missing folder measurements cannot be inferred from the snapshot summary");
+});
 
 test("a change is traced down to the folder that explains it", () => {
   const volume = volumeOf(

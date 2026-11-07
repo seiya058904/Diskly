@@ -101,6 +101,8 @@ The launcher images show the real app. The report images use synthetic data; non
 
 The interface takes cues from iOS: true black, restrained glass effects, spring-like interactions and smooth, focused movement.
 
+Opening a scan from **历史** (History) shows that scan, including in the trend and copied AI summary. If its details have been pruned, Diskly shows the retained summary and labels what is unavailable. Existing saved reports keep their details when reopened through the app.
+
 <a id="performance"></a>
 
 ## ⚡ Fast on real disks. Small over time.

@@ -84,6 +84,89 @@ pub fn render<T: Serialize>(data: &T) -> Result<String, serde_json::Error> {
         .replacen("__DATA__", &json, 1))
 }
 
+/// Recover only the inert data of a saved report. Its old markup and script are
+/// never reused: reopening through the app renders this data with today's code.
+pub fn saved_data(html: &str) -> Option<serde_json::Value> {
+    let start = "<script type=\"application/json\" id=\"diskly-data\">";
+    let json = html.split_once(start)?.1.split_once("</script>")?.0;
+    let mut data: serde_json::Value = serde_json::from_str(json).ok()?;
+    if data["format"] != 1 && data["format"] != 2 {
+        return None;
+    }
+    // Format 1 has the same snapshots/table but predates insights and records.
+    // Decode each disk separately: one damaged disk must not destroy the others.
+    let volumes: Vec<_> = data["volumes"]
+        .as_array()?
+        .iter()
+        .filter_map(|v| {
+            let mut volume: crate::session::VolumeReport =
+                serde_json::from_value(v.clone()).ok()?;
+            if !valid_table(&volume) {
+                for scan in &volume.snapshots {
+                    if !volume.records.iter().any(|r| r.id == scan.id) {
+                        volume.records.push(crate::store::ScanRecord {
+                            id: scan.id.clone(),
+                            at: scan.taken_at,
+                            letter: scan.letter,
+                            engine: scan.engine.clone(),
+                            total: scan.total_bytes,
+                            free: scan.free_bytes,
+                            files: scan.files,
+                            dirs: scan.dirs,
+                            top: Vec::new(),
+                            serial: scan.serial,
+                            unread_top: None,
+                        });
+                    }
+                }
+                volume.snapshots.clear();
+                volume.table = crate::compare::NodeTable::default();
+                volume.file_changes.clear();
+                volume.insights.clear();
+                volume
+                    .issues
+                    .push("已跳过报告中损坏的目录详情，保留可读取的扫描摘要。".into());
+            }
+            volume
+                .records
+                .sort_by(|a, b| (a.at, &a.id).cmp(&(b.at, &b.id)));
+            Some(volume)
+        })
+        .collect();
+    data["volumes"] = serde_json::to_value(volumes).ok()?;
+    let mut data: crate::session::ReportData = serde_json::from_value(data).ok()?;
+    data.format = 2;
+    serde_json::to_value(data).ok()
+}
+
+fn valid_table(volume: &crate::session::VolumeReport) -> bool {
+    let table = &volume.table;
+    let n = table.names.len();
+    let scans = volume.snapshots.len();
+    if n == 0 {
+        return scans == 0
+            && table.parents.is_empty()
+            && table.sizes.is_empty()
+            && table.unread.is_empty();
+    }
+    table.parents.len() == n
+        && table.parents[0] == -1
+        && table
+            .parents
+            .iter()
+            .enumerate()
+            .skip(1)
+            .all(|(i, p)| *p >= 0 && (*p as usize) < i)
+        && table.sizes.len() == scans
+        && table.sizes.iter().all(|row| row.len() == n)
+        && table.unread.len() == scans
+        && table.unread.iter().flatten().all(|i| (*i as usize) < n)
+        && volume
+            .snapshots
+            .windows(2)
+            .all(|s| (s[0].taken_at, &s[0].id) < (s[1].taken_at, &s[1].id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

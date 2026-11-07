@@ -12,7 +12,7 @@ Push-Location $root
 try {
     cargo build -q -p diskly-core --example render_report
     if ($LASTEXITCODE -ne 0) { throw 'build failed' }
-    foreach ($scenario in 'normal', 'first', 'walk-unknown', 'engines', 'hostile', 'pruned', 'long-view', 'empty', 'big') {
+    foreach ($scenario in 'normal', 'historical', 'legacy', 'same-second', 'archived', 'run-only', 'first', 'walk-unknown', 'engines', 'hostile', 'pruned', 'long-view', 'empty', 'big') {
         $json = node scripts\demo\demo-data.js $scenario
         if ($LASTEXITCODE -ne 0) { throw "demo data failed for $scenario" }
         $file = Join-Path $Out "$scenario.json"
