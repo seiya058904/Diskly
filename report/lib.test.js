@@ -482,6 +482,35 @@ test("a thinned trend still ends at the selected snapshot's known capacity", () 
   assert.equal(lib.longTerm(points), null, "missing folder measurements cannot be inferred from the snapshot summary");
 });
 
+test("current readability propagates to children without borrowing comparison uncertainty", () => {
+  const v = volumeOf([["restored", 0, 30], ["denied", 20, 0], ["denied\\child", 20, null]], {
+    snapshots: two(), unread: [["restored"], ["denied"]],
+  });
+  const unread = lib.unreadNodes(v.table, 1);
+  assert.equal(unread[node(v, "restored")], 0);
+  assert.equal(unread[node(v, "denied\\child")], 1);
+  const cmp = lib.compare(v, 0, 1);
+  assert.equal(cmp.state[node(v, "restored")], STATE.UNKNOWN);
+  assert.equal(cmp.delta[0], 0, "neither regained access nor denied access counts as space change");
+});
+
+test("leaf folders expose kept files, including omitted intermediate folders, exactly once", () => {
+  const v = volumeOf([["Backup", 30], ["Backup\\visible", 4], ["Backup-old", 2]], { snapshots: [snap("000000000100-a")] });
+  v.insights = { [v.snapshots[0].id]: { files: [
+    { path: "Backup\\image.vhdx", size: 19 },
+    { path: "backup\\omitted\\ext4.vhdx", size: 5 },
+    { path: "BACKUP\\VISIBLE\\data.bin", size: 4 },
+    { path: "Backup-old\\unrelated.bin", size: 2 },
+    { path: "root.bin", size: 1 },
+  ] } };
+  assert.deepEqual(lib.folderFiles(v, 0, 0).map((f) => f.name), ["root.bin"]);
+  const files = lib.folderFiles(v, 0, node(v, "Backup"));
+  assert.deepEqual(files.map((f) => f.name), ["image.vhdx", "omitted\\ext4.vhdx"]);
+  assert.equal(files.reduce((s, f) => s + f.size, 0) + 4, 28, "the visible child and its file are counted only once");
+  assert.deepEqual(lib.folderFiles(v, 0, node(v, "Backup\\visible")).map((f) => f.name), ["data.bin"]);
+  assert.deepEqual(lib.folderFiles(v, 1, node(v, "Backup")), [], "no files from another scan");
+});
+
 test("a change is traced down to the folder that explains it", () => {
   const volume = volumeOf(
     [

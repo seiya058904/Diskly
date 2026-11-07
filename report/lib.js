@@ -125,6 +125,16 @@ const DisklyLib = (() => {
     return children;
   }
 
+  /* Current readability is separate from whether a change can be measured. */
+  function unreadNodes(table, b) {
+    const unread = new Uint8Array(table.names.length);
+    for (const i of table.unread[b] || []) unread[i] = 1;
+    for (let i = 1; i < unread.length; i += 1) {
+      if (unread[table.parents[i]]) unread[i] = 1;
+    }
+    return unread;
+  }
+
   /* Compare scans `a` and `b` (indexes) of a volume. A folder that either scan
      could not read is unknown, with everything below it. What such a folder seems
      to have changed by is taken out of its ancestors, so a folder that could not
@@ -499,6 +509,23 @@ const DisklyLib = (() => {
     return rel ? `${letter}:\\${rel}` : `${letter}:\\`;
   }
 
+  /* Kept files belong to their nearest kept directory. If intermediate folders
+     were omitted to bound the report, show the remaining relative path rather
+     than losing the file or counting it both here and in a visible child. */
+  function folderFiles(volume, b, node, children = childrenOf(volume.table)[node]) {
+    const prefix = pathOf(volume.table, node);
+    const start = prefix ? `${prefix}\\` : "";
+    const childNames = new Set(children.map((i) => volume.table.names[i].toLowerCase()));
+    const files = volume.insights?.[volume.snapshots[b]?.id]?.files || [];
+    return files.flatMap((file) => {
+      if (!file.path.toLowerCase().startsWith(start.toLowerCase())) return [];
+      const name = file.path.slice(start.length);
+      const slash = name.indexOf("\\");
+      if (slash >= 0 && childNames.has(name.slice(0, slash).toLowerCase())) return [];
+      return [{ ...file, name }];
+    });
+  }
+
   /* ---- What to compare ---- */
 
   function recordSnapshot(record) {
@@ -857,6 +884,7 @@ const DisklyLib = (() => {
     formatDay,
     formatDelta,
     formatSeconds,
+    folderFiles,
     headline,
     hotspots,
     kindIndex,
@@ -874,6 +902,7 @@ const DisklyLib = (() => {
     selectedSnapshot,
     sizeHotspots,
     squarify,
+    unreadNodes,
     withComparisons,
   };
 })();

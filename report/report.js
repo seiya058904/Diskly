@@ -248,6 +248,14 @@
     return kidsCache.get(table);
   }
 
+  const unreadCache = new WeakMap();
+  function unreadOf(table, b) {
+    if (!unreadCache.has(table)) unreadCache.set(table, new Map());
+    const scans = unreadCache.get(table);
+    if (!scans.has(b)) scans.set(b, L.unreadNodes(table, b));
+    return scans.get(b);
+  }
+
   /* A top-level folder keeps its color at every depth of the map. */
   const hueCache = new Map();
 
@@ -608,24 +616,21 @@
   const GAP = 1.5;
 
   /* The children of a place, and what else is in it: its biggest files, and the rest. */
-  function mapChildren(pair, node, limit, files) {
-    const { volume, b, cmp } = pair;
+  function mapChildren(pair, node, limit) {
+    const { volume, b } = pair;
     const table = volume.table;
     const sizes = table.sizes[b];
-    const unread = new Set(table.unread[b] || []);
+    const unread = unreadOf(table, b);
+    if (unread[node]) return [];
     const items = [];
     for (const child of kidsOf(table)[node]) {
       const size = sizes[child];
-      if (!size || unread.has(child) || (cmp && cmp.state[child] === STATE.UNKNOWN)) continue;
-      items.push({ kind: "dir", pair, node: child, name: table.names[child], size, enterable: kidsOf(table)[child].length > 0 });
+      if (!size || unread[child]) continue;
+      items.push({ kind: "dir", pair, node: child, name: table.names[child], size, enterable: true });
     }
-    const parentPath = L.pathOf(table, node);
-    for (const file of files) {
-      const cut = file.path.lastIndexOf("\\");
-      const at = cut < 0 ? "" : file.path.slice(0, cut);
-      if (at.toLowerCase() === parentPath.toLowerCase()) {
-        items.push({ kind: "file", pair, node, file, name: file.path.slice(cut + 1), size: file.size });
-      }
+    for (const file of L.folderFiles(volume, b, node, kidsOf(table)[node])) {
+      if (!(file.size > 0)) continue;
+      items.push({ kind: "file", pair, node, file, name: file.name, size: file.size });
     }
     items.sort((x, y) => y.size - x.size);
     const whole = sizes[node] ?? 0;
@@ -634,14 +639,10 @@
     const rest = whole - listed;
     if (rest > whole * 0.002 && rest > 0) {
       const hidden = items.length - kept.length;
-      kept.push({ kind: "rest", pair, node, name: hidden > 0 ? `其他 ${hidden} 项和文件` : "其他文件", size: rest });
+      kept.push({ kind: "rest", pair, node, name: hidden > 0 ? `其他 ${hidden} 项及未收录详情` : "其他文件和未收录详情", size: rest });
       kept.sort((x, y) => y.size - x.size);
     }
     return kept;
-  }
-
-  function filesOf(pair) {
-    return pair.volume.insights?.[pair.volume.snapshots[pair.b].id]?.files || [];
   }
 
   /* How a tile is colored: by which top-level folder it is in, or by what changed. */
@@ -741,7 +742,7 @@
       const nest = item.kind !== "file" && item.kind !== "rest" && rect.w >= 150 && rect.h >= 104;
       add(item, rect, 0, i, nest);
       if (!nest) return;
-      const kids = mapChildren(item.pair, item.node, NESTED_ITEMS, filesOf(item.pair));
+      const kids = mapChildren(item.pair, item.node, NESTED_ITEMS);
       if (!kids.length) return;
       const pad = 5;
       const head = 40;
@@ -774,7 +775,7 @@
       return { available, current: null, node: 0, items };
     }
     const node = ui.browse && ui.browse.key === current.volume.key ? ui.browse.node : 0;
-    return { available, current, node, items: mapChildren(current, node, MAP_ITEMS, filesOf(current)) };
+    return { available, current, node, items: mapChildren(current, node, MAP_ITEMS) };
   }
 
   let mapFrame = null;
@@ -929,18 +930,28 @@
     const sizes = table.sizes[b];
     const kids = kidsOf(table);
     const children = kids[parent];
-    const parentSize = sizes[parent] ?? 0;
-    const unreadHere = new Set(table.unread[b] || []);
-    const isUnknown = (i) => (cmp ? cmp.state[i] === STATE.UNKNOWN : unreadHere.has(i));
+    const unreadHere = unreadOf(table, b);
+    const parentSize = unreadHere[parent] ? null : sizes[parent] ?? 0;
+    const isUnknown = (i) => Boolean(unreadHere[i]);
     const visible = children.filter((i) => (sizes[i] !== null && sizes[i] !== undefined) || (cmp && cmp.state[i] === STATE.REMOVED) || isUnknown(i));
-    const rank = (i) => {
-      if (ui.sort === "change" && cmp && !isUnknown(i)) return Math.abs(cmp.delta[i]);
-      return sizes[i] ?? 0;
+    const rank = (entry) => {
+      if (ui.sort === "change" && cmp) return entry.file || !Number.isFinite(cmp.delta[entry.i]) ? 0 : Math.abs(cmp.delta[entry.i]);
+      return entry.file ? entry.file.size : sizes[entry.i] ?? 0;
     };
-    visible.sort((x, y) => rank(y) - rank(x));
-    const listed = visible.slice(0, 200);
+    const entries = visible.map((i) => ({ i }));
+    if (!unreadHere[parent]) entries.push(...L.folderFiles(volume, b, parent, children).map((file) => ({ file })));
+    entries.sort((x, y) => rank(y) - rank(x));
+    const listed = entries.slice(0, 200);
 
-    const rows = listed.map((i, place) => {
+    const rows = listed.map(({ i, file }, place) => {
+      if (file) {
+        const full = L.displayPath(volume.snapshots[b].letter, file.path);
+        const share = colored(widened(el("span", { class: "folder-share" }), file.size, parentSize), kindColor(file.kind));
+        return placed(el("button", { type: "button", class: "folder row folder-file", title: `复制文件路径：${full}`, onclick: () => copyPath(full) },
+          el("span", { class: "folder-main" }, el("span", { class: "folder-name", text: file.name }), share),
+          el("span", { class: "folder-numbers" }, el("span", { class: "folder-size", text: L.formatBytes(file.size) }), el("span", { class: "folder-change quiet", text: "文件 · 点按复制" })),
+          el("span")), place);
+      }
       const unknown = isUnknown(i);
       const size = sizes[i];
       const share = el("span", { class: unknown ? "folder-share unknown" : "folder-share" });
@@ -952,7 +963,8 @@
         changeText = "未知";
         quiet = true;
       } else if (cmp) {
-        if (cmp.state[i] === STATE.ADDED || cmp.state[i] === STATE.REMOVED) changeText = L.formatDelta(cmp.delta[i]);
+        if (cmp.state[i] === STATE.UNKNOWN) { changeText = "变化未知"; quiet = true; }
+        else if (cmp.state[i] === STATE.ADDED || cmp.state[i] === STATE.REMOVED) changeText = L.formatDelta(cmp.delta[i]);
         else if (cmp.delta[i] === 0) { changeText = "无变化"; quiet = true; } else changeText = L.formatDelta(cmp.delta[i]);
       }
       const tag = cmp && cmp.state[i] === STATE.ADDED ? "新出现" : cmp && cmp.state[i] === STATE.REMOVED ? "已消失" : null;
@@ -964,7 +976,7 @@
           el("span", { class: "folder-size", text: unknown ? "未知" : L.formatBytes(size ?? 0) }),
           changeText ? el("span", { class: quiet ? "folder-change quiet" : "folder-change", text: changeText }) : null),
       ];
-      const enterable = kids[i].length > 0;
+      const enterable = kids[i].length > 0 || (!unknown && size != null);
       if (enterable) {
         cells.push(chevron());
         return placed(el("button", { type: "button", class: "folder row", onclick: () => browseTo(volume.key, i) }, ...cells), place);
@@ -974,13 +986,13 @@
     });
 
     /* The rest of this folder: its own files and folders too small to list. */
-    const sum = listed.reduce((total, i) => total + (isUnknown(i) ? 0 : (sizes[i] ?? 0)), 0);
+    const sum = listed.reduce((total, { i, file }) => total + (file ? file.size : isUnknown(i) ? 0 : (sizes[i] ?? 0)), 0);
     const rest = parentSize - sum;
-    if (rest > 0 && rows.length) {
+    if (rest > 0) {
       const share = el("span", { class: "folder-share" });
       share.style.width = `${parentSize ? Math.max(0.5, percent(rest, parentSize)).toFixed(1) : 0}%`;
       rows.push(placed(el("div", { class: "folder rest" },
-        el("span", { class: "folder-main" }, el("span", { class: "folder-name", text: "文件和较小的目录" }), share),
+        el("span", { class: "folder-main" }, el("span", { class: "folder-name", text: "其他文件和未收录的目录详情" }), share),
         el("span", { class: "folder-numbers" }, el("span", { class: "folder-size", text: L.formatBytes(rest) })),
         el("span")), rows.length));
     }
@@ -997,9 +1009,12 @@
     }
     if (place.current) {
       const { cmp, volume, b } = place.current;
-      const unread = new Set(volume.table.unread[b] || []);
-      const unknown = kidsOf(volume.table)[place.node].filter((i) => (cmp ? cmp.state[i] === STATE.UNKNOWN : unread.has(i))).length;
+      const unread = unreadOf(volume.table, b);
+      const unknown = kidsOf(volume.table)[place.node].filter((i) => unread[i]).length;
       if (unknown) parts.push(el("span", { text: `这里有 ${unknown} 个目录未能读取，大小未知，没有画在图里。` }));
+      if (cmp && kidsOf(volume.table)[place.node].some((i) => !unread[i] && cmp.state[i] === STATE.UNKNOWN)) {
+        parts.push(el("span", { text: "部分目录上次未能读取：显示本次占用，变化仍为未知。" }));
+      }
     }
     return parts.length ? el("div", { class: "map-legend" }, ...parts) : null;
   }
@@ -1069,14 +1084,21 @@
             el("span", { class: "sep", text: "\\" }));
         }
       });
+      const full = L.displayPath(letter, L.pathOf(table, node));
+      const location = el("div", { class: "folder-location" }, crumbs,
+        el("button", { type: "button", class: "pill quiet press", id: "copy-folder-path", text: "复制目录路径", title: full, onclick: () => copyPath(full) }));
+      crumbs = location;
       rows = folderRows(current, node);
-      const size = L.formatBytes(table.sizes[current.b][node] ?? 0);
+      const unknown = unreadOf(table, current.b)[node];
+      const absent = table.sizes[current.b][node] == null;
+      const size = L.formatBytes(unknown ? null : table.sizes[current.b][node]);
       const changed = current.cmp && !Number.isNaN(current.cmp.delta[node]) && current.cmp.state[node] !== STATE.SAME;
-      summary = el("p", { class: "section-hint", text: changed ? `这个目录共 ${size}，变化 ${L.formatDelta(current.cmp.delta[node])}。` : `这个目录共 ${size}。` });
+      const description = unknown ? "这次未能读取这个目录，大小未知。" : absent ? "所选扫描中这个目录已不存在。" : changed ? `这个目录共 ${size}，变化 ${L.formatDelta(current.cmp.delta[node])}。` : `这个目录共 ${size}。`;
+      summary = el("p", { class: "section-hint", text: `${description}这里只展示已收录的大文件和目录，其余占用合并显示。` });
     }
 
     const list = el("div", { class: "group folder-list list-in" },
-      ...(rows.length ? rows : [el("div", { class: "empty", text: "这个目录下没有更多可显示的子目录。" })]));
+      ...(rows.length ? rows : [el("div", { class: "empty", text: "这个目录下没有收录可显示的文件或子目录。" })]));
     return placed(el("section", { id: "folders" },
       head,
       crumbs,

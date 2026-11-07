@@ -684,6 +684,25 @@ button.fact:active {
 
 /* ---- The map ---- */
 
+.folder-location {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 9px;
+}
+
+.folder-location .crumbs {
+  min-width: 0;
+  flex: 1 1 260px;
+  margin-bottom: 0;
+}
+
+.folder-location > button {
+  flex: none;
+}
+
 .crumbs {
   display: flex;
   flex-wrap: wrap;

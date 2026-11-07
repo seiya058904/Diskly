@@ -157,13 +157,35 @@ try {
     assert.deepEqual(page.consoleErrors, []);
   });
 
-  await check("format-one data still renders folders and comparisons", async () => {
+  await check("format-one data still renders folders, comparisons and copy controls", async () => {
     await openClean("legacy");
     assert.match(await text("h1"), /4.0 GB/);
     assert.equal(await count("#largest"), 0, "old reports did not keep file insights");
     await page.click('.segments[aria-label="选择磁盘"] button:nth-child(2)');
     await page.eval('[...document.querySelectorAll("#folders button.folder")].find((r) => r.querySelector(".folder-name").textContent === "Windows").click()');
     assert.equal(await text(".crumbs .here"), "Windows");
+    assert.equal(await count("#copy-folder-path"), 1);
+    assert.deepEqual(page.consoleErrors, []);
+  });
+
+  await check("restored leaf folders show current files while changes stay unknown", async () => {
+    await openClean("leaf-edges");
+    const restored = await page.eval('[...document.querySelectorAll("#folders button.folder")].find((r) => r.querySelector(".folder-name").textContent === "Restored")?.textContent');
+    assert.match(restored, /19.0 GB.*变化未知/);
+    assert.ok(await page.eval('[...document.querySelectorAll(".tile")].some((t) => t.getAttribute("aria-label").startsWith("Restored，"))'));
+    await page.eval('[...document.querySelectorAll("#folders button.folder")].find((r) => r.querySelector(".folder-name").textContent === "Restored").click()');
+    assert.match(await text(".folder-file"), /image.vhdx.*19.0 GB/);
+    assert.ok(!(await text("#folders .section-hint")).includes("+19.0 GB"));
+    await page.screenshot(join(out, "restored-leaf.png"));
+    await page.eval('[...document.querySelectorAll(".crumbs button")].find((b) => b.textContent === "C:").click()');
+    await page.eval('[...document.querySelectorAll("#folders button.folder")].find((r) => r.querySelector(".folder-name").textContent === "Denied").click()');
+    assert.match(await text("#folders .section-hint"), /大小未知/);
+    assert.ok(!(await text("#folders .section-hint")).includes("0 B"));
+    assert.equal(await count(".tile"), 0);
+    await page.eval('[...document.querySelectorAll(".crumbs button")].find((b) => b.textContent === "C:").click()');
+    await page.eval('[...document.querySelectorAll("#folders button.folder")].find((r) => r.querySelector(".folder-name").textContent === "Empty").click()');
+    assert.match(await text(".folder-file"), /zero.bin.*0 B/);
+    assert.equal(await count(".tile"), 0, "zero-byte files have no area");
     assert.deepEqual(page.consoleErrors, []);
   });
 
@@ -192,6 +214,43 @@ try {
     assert.equal(await text(".ring-center b"), "未知");
     assert.equal(await count("#folders, #largest, .trend"), 0);
     assert.deepEqual(page.consoleErrors, []);
+  });
+
+  await check("leaf folders open from list and map, with files, remainder and copyable paths", async () => {
+    await openClean("normal");
+    await page.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    await page.send("Browser.grantPermissions", { permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"] }).catch(() => {});
+    await page.click('.segments[aria-label="选择磁盘"] button:nth-child(3)');
+    await page.eval('[...document.querySelectorAll("#folders button.folder")].find((b) => b.querySelector(".folder-name").textContent === "Backup").click()');
+    assert.equal(await text(".crumbs .here"), "Backup");
+    assert.match(await text(".folder-file"), /laptop-image-2026.vhdx.*19.0 GB/);
+    assert.match(await text(".folder.rest"), /其他文件和未收录的目录详情.*2.0 GB/);
+    assert.ok(await page.eval('[...document.querySelectorAll(".map-canvas .tile")].some((e) => e.getAttribute("aria-label").startsWith("laptop-image-2026.vhdx，文件"))'));
+    await page.realClick("#copy-folder-path");
+    await page.waitFor('document.querySelector(".toast.on")');
+    assert.equal(await page.eval("navigator.clipboard.readText()"), "D:\\Backup");
+    await page.realClick(".folder-file");
+    await page.waitFor('document.querySelector(".toast.on")');
+    assert.equal(await page.eval("navigator.clipboard.readText()"), "D:\\Backup\\laptop-image-2026.vhdx");
+    await page.screenshot(join(out, "leaf-folder.png"));
+    await page.eval('[...document.querySelectorAll(".crumbs button")].find((b) => b.textContent === "D:").click()');
+    await page.eval('[...document.querySelectorAll(".map-canvas .tile")].find((b) => b.getAttribute("aria-label").startsWith("Backup，")).click()');
+    assert.equal(await text(".crumbs .here"), "Backup");
+    for (const width of [480, 320]) {
+      await page.viewport(width, 800);
+      assert.equal(await page.eval("document.documentElement.scrollWidth - document.documentElement.clientWidth"), 0);
+    }
+    await page.eval('document.querySelector("#folders").scrollIntoView({ block: "start" })');
+    await page.screenshot(join(out, "leaf-folder-mobile.png"));
+    assert.deepEqual(page.consoleErrors, []);
+  });
+
+  await check("files remain reachable when intermediate folders were omitted", async () => {
+    await openClean("normal");
+    await page.eval('[...document.querySelectorAll("#largest .with-action")].find((r) => r.textContent.includes("ext4.vhdx")).querySelector(".locate").click()');
+    assert.equal(await text(".crumbs .here"), "wsl");
+    assert.ok((await texts(".folder-file .folder-name")).includes("main\\ext4.vhdx"));
+    assert.equal(await count(".folder-file"), 1);
   });
 
   await check("the biggest files come first, and nothing ranks what is small", async () => {
@@ -436,7 +495,7 @@ try {
 
   await check("no horizontal scrolling at any width, in any state", async () => {
     await page.media({ reducedMotion: "reduce" });
-    for (const scenario of ["normal", "historical", "legacy", "same-second", "archived", "run-only", "walk-unknown", "hostile", "engines", "first", "pruned"]) {
+    for (const scenario of ["normal", "historical", "legacy", "same-second", "leaf-edges", "archived", "run-only", "walk-unknown", "hostile", "engines", "first", "pruned"]) {
       for (const width of [1920, 1280, 900, 760, 480, 360, 320]) {
         await page.viewport(width, 800);
         await page.goto(url(scenario));

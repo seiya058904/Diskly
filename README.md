@@ -103,6 +103,8 @@ The interface takes cues from iOS: true black, restrained glass effects, spring-
 
 Opening a scan from **历史** (History) shows that scan, including in the trend and copied AI summary. If its details have been pruned, Diskly shows the retained summary and labels what is unavailable. Existing saved reports keep their details when reopened through the app.
 
+The space map and folder list also open folders without subfolders: inspect retained large files, copy a file or folder path, and see the remaining space grouped as unlisted details. The report keeps a bounded selection of files, not a complete file browser.
+
 <a id="performance"></a>
 
 ## ⚡ Fast on real disks. Small over time.

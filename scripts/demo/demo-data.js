@@ -314,6 +314,15 @@ const SCENARIOS = {
     return page([c], { scan_id: ids[1], started_at: NOW });
   },
 
+  "leaf-edges": () => {
+    const snaps = [ids[2], ids[3]].map((id, i) => snapshotView(id, TIMES[i + 2], "C", "Windows", 475 * GB, 400 * GB, 10, 5, { engine: "walk" }));
+    const v = volume("v-guid-c", "C", "Windows", snaps, tableOf([
+      ["Restored", 0, 19 * GB], ["Denied", 20 * GB, 0], ["Denied\\child", 20 * GB, null], ["Empty", 0, 0],
+    ], 2, [["Restored"], ["Denied"]]));
+    v.insights[ids[3]] = insightsOf([file("Restored\\image.vhdx", 19 * GB, "archive"), file("Empty\\zero.bin", 0, "other")], [], [], [], []);
+    return page([v]);
+  },
+
   archived: () => {
     const c = cVolume();
     const old = c.snapshots[0];
